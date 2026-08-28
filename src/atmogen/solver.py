@@ -8,7 +8,7 @@ from typing import Mapping
 import numpy as np
 
 from .chemistry import IdealGibbsEquilibrium, normalized_initial_composition
-from .database import BUILTIN_DATABASE, ChemicalDatabase
+from .database import BUILTIN_DATABASE, ChemicalDatabase, canonical_species
 from .hydrostatic import (
     logarithmic_cell_mean_pressure,
     logarithmic_pressure_interfaces,
@@ -34,6 +34,7 @@ from .models import (
 from .phase import (
     atmospheric_composition_with_surface_vapor,
     partition_surface_reservoirs,
+    saturation_pressure_pa,
 )
 from .radiation import (
     SIGMA_SB,
@@ -44,8 +45,9 @@ from .radiation import (
     spectrum_to_srgb,
 )
 from .thermal import (
-    DEFAULT_GRAY_OPTICAL_DEPTH_PRESSURE_EXPONENT,
+    dilute_saturated_log_pressure_gradient,
     dry_adiabatic_log_pressure_gradient,
+    solve_dilute_saturated_radiative_convective_profile,
     solve_dry_radiative_convective_profile,
 )
 from .vertical_processes import solve_vertical_processes
@@ -165,17 +167,143 @@ def _longwave_tau(
     )
 
 
+def _resolved_temperature_profile_mode(settings: SolverSettings) -> str:
+    requested = settings.temperature_profile_mode
+    if requested != "auto":
+        return requested
+    if settings.fidelity is Fidelity.FAST:
+        return "isothermal"
+    if settings.fidelity is Fidelity.STANDARD:
+        return "dry_radiative_convective"
+    return "dilute_saturated"
+
+
+def _select_moist_condensible(
+    *,
+    planet: PlanetPhysicalState,
+    settings: SolverSettings,
+    surface_temperature_k: float,
+    mole_fractions: Mapping[str, float],
+    phase: PhaseReservoirResult,
+    database: ChemicalDatabase,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Select one physically eligible saturated condensable for the dilute backend."""
+    condensed = {
+        canonical_species(key): float(
+            phase.liquid_mass_kg.get(key, 0.0)
+            + phase.solid_mass_kg.get(key, 0.0)
+        )
+        for key in set(phase.liquid_mass_kg) | set(phase.solid_mass_kg)
+    }
+    condensed = {key: mass for key, mass in condensed.items() if mass > 0}
+    if settings.moist_condensible != "auto":
+        requested = canonical_species(settings.moist_condensible)
+        candidates = (requested,)
+    else:
+        candidates = tuple(
+            key
+            for key, _mass in sorted(
+                condensed.items(), key=lambda item: (-item[1], item[0])
+            )
+        )
+
+    notes: list[str] = []
+    for key in candidates:
+        if key not in condensed:
+            notes.append(
+                f"{key}: no condensed reservoir is present; saturated convective "
+                "constraint not activated"
+            )
+            continue
+        species = database.get(key)
+        if species.latent_heat_j_kg is None or species.latent_heat_j_kg <= 0:
+            notes.append(
+                f"{key}: latent heat unavailable; saturated convective constraint "
+                "not activated"
+            )
+            continue
+        if (
+            species.freezing_point_k is not None
+            and surface_temperature_k < species.freezing_point_k
+        ):
+            notes.append(
+                f"{key}: surface condensate is solid and the database does not "
+                "separate sublimation from vaporization latent heat; dry constraint used"
+            )
+            continue
+        carrier_fraction = sum(
+            float(value)
+            for raw_key, value in mole_fractions.items()
+            if canonical_species(raw_key) != key and float(value) > 0
+        )
+        if carrier_fraction <= 0:
+            notes.append(
+                f"{key}: no non-condensable carrier atmosphere exists; dilute "
+                "saturated approximation is invalid"
+            )
+            continue
+        saturation_pressure, saturation_note = saturation_pressure_pa(
+            key, surface_temperature_k
+        )
+        if saturation_pressure is None:
+            notes.append(
+                saturation_note
+                or f"{key}: saturation-pressure data unavailable; dry constraint used"
+            )
+            continue
+        if (
+            saturation_note
+            and "estimated" in saturation_note.lower()
+            and not settings.moist_allow_estimated_saturation
+        ):
+            notes.append(
+                f"{key}: only an estimated saturation-pressure relation is bundled; "
+                "automatic saturated convection requires sourced saturation data"
+            )
+            continue
+        relative_saturation = (
+            float(mole_fractions.get(key, 0.0))
+            * planet.surface_pressure_pa
+            / max(float(saturation_pressure), 1e-300)
+        )
+        if relative_saturation < settings.moist_saturation_threshold:
+            notes.append(
+                f"{key}: lower-boundary relative saturation {relative_saturation:.6g} "
+                f"is below threshold {settings.moist_saturation_threshold:.6g}"
+            )
+            continue
+        gradient, _r_s, gradient_note = dilute_saturated_log_pressure_gradient(
+            pressure_pa=planet.surface_pressure_pa,
+            temperature_k=surface_temperature_k,
+            mole_fractions=mole_fractions,
+            condensible=key,
+            max_saturation_mixing_ratio=settings.moist_max_saturation_mixing_ratio,
+            allow_estimated_saturation=settings.moist_allow_estimated_saturation,
+            database=database,
+        )
+        if gradient_note and gradient_note not in notes:
+            notes.append(gradient_note)
+        if gradient is None:
+            continue
+        return key, tuple(notes)
+
+    return None, tuple(notes)
+
+
 def _build_atmospheric_profile(
     *,
     planet: PlanetPhysicalState,
     settings: SolverSettings,
     surface_temperature_k: float,
     mole_fractions: Mapping[str, float],
+    phase: PhaseReservoirResult,
     longwave_optical_depth_surface: float,
     database: ChemicalDatabase,
 ):
-    """Build the fidelity-selected vertical thermal/hydrostatic profile."""
-    if settings.fidelity is Fidelity.FAST:
+    """Build the configured vertical thermal/hydrostatic profile and diagnostics."""
+    mode = _resolved_temperature_profile_mode(settings)
+    empty = np.zeros(settings.resolved_layers, dtype=bool)
+    if mode == "isothermal":
         profile = solve_isothermal_hydrostatic(
             surface_pressure_pa=planet.surface_pressure_pa,
             top_pressure_pa=settings.top_pressure_pa,
@@ -185,7 +313,7 @@ def _build_atmospheric_profile(
             layers=settings.resolved_layers,
             database=database,
         )
-        return profile, np.zeros(settings.resolved_layers, dtype=bool), "isothermal_fast"
+        return profile, empty, empty.copy(), "isothermal", None, ()
 
     pressure_interfaces = logarithmic_pressure_interfaces(
         planet.surface_pressure_pa,
@@ -193,15 +321,84 @@ def _build_atmospheric_profile(
         settings.resolved_layers,
     )
     pressure = logarithmic_cell_mean_pressure(pressure_interfaces)
-    temperature_profile, adjusted = solve_dry_radiative_convective_profile(
-        pressure_pa=pressure,
-        surface_pressure_pa=planet.surface_pressure_pa,
-        surface_temperature_k=surface_temperature_k,
-        longwave_optical_depth_surface=longwave_optical_depth_surface,
-        mole_fractions=mole_fractions,
-        optical_depth_pressure_exponent=DEFAULT_GRAY_OPTICAL_DEPTH_PRESSURE_EXPONENT,
-        database=database,
-    )
+    moist_condensible: str | None = None
+    thermal_notes: tuple[str, ...] = ()
+    saturated_used = empty.copy()
+
+    if mode == "dilute_saturated":
+        moist_condensible, selection_notes = _select_moist_condensible(
+            planet=planet,
+            settings=settings,
+            surface_temperature_k=surface_temperature_k,
+            mole_fractions=mole_fractions,
+            phase=phase,
+            database=database,
+        )
+        thermal_notes = selection_notes
+        if moist_condensible is not None:
+            (
+                temperature_profile,
+                adjusted,
+                saturated_used,
+                adjustment_notes,
+            ) = solve_dilute_saturated_radiative_convective_profile(
+                pressure_pa=pressure,
+                surface_pressure_pa=planet.surface_pressure_pa,
+                surface_temperature_k=surface_temperature_k,
+                longwave_optical_depth_surface=longwave_optical_depth_surface,
+                mole_fractions=mole_fractions,
+                condensible=moist_condensible,
+                max_saturation_mixing_ratio=(
+                    settings.moist_max_saturation_mixing_ratio
+                ),
+                allow_estimated_saturation=(
+                    settings.moist_allow_estimated_saturation
+                ),
+                optical_depth_pressure_exponent=(
+                    settings.gray_optical_depth_pressure_exponent
+                ),
+                database=database,
+            )
+            thermal_notes = tuple(
+                dict.fromkeys((*thermal_notes, *adjustment_notes))
+            )
+            actual_mode = "dilute_saturated_gray_radiative_convective"
+        else:
+            if (
+                settings.temperature_profile_mode == "dilute_saturated"
+                and not settings.allow_fidelity_fallback
+            ):
+                raise RuntimeError(
+                    "explicit dilute_saturated temperature profile is not physically "
+                    "eligible and allow_fidelity_fallback is false: "
+                    + "; ".join(thermal_notes)
+                )
+            temperature_profile, adjusted = solve_dry_radiative_convective_profile(
+                pressure_pa=pressure,
+                surface_pressure_pa=planet.surface_pressure_pa,
+                surface_temperature_k=surface_temperature_k,
+                longwave_optical_depth_surface=longwave_optical_depth_surface,
+                mole_fractions=mole_fractions,
+                optical_depth_pressure_exponent=(
+                    settings.gray_optical_depth_pressure_exponent
+                ),
+                database=database,
+            )
+            actual_mode = "dry_gray_radiative_convective"
+    else:
+        temperature_profile, adjusted = solve_dry_radiative_convective_profile(
+            pressure_pa=pressure,
+            surface_pressure_pa=planet.surface_pressure_pa,
+            surface_temperature_k=surface_temperature_k,
+            longwave_optical_depth_surface=longwave_optical_depth_surface,
+            mole_fractions=mole_fractions,
+            optical_depth_pressure_exponent=(
+                settings.gray_optical_depth_pressure_exponent
+            ),
+            database=database,
+        )
+        actual_mode = "dry_gray_radiative_convective"
+
     profile = solve_temperature_profile_hydrostatic(
         pressure_interface_pa=pressure_interfaces,
         temperature_k=temperature_profile,
@@ -209,7 +406,14 @@ def _build_atmospheric_profile(
         mole_fractions=mole_fractions,
         database=database,
     )
-    return profile, adjusted, "dry_gray_radiative_convective"
+    return (
+        profile,
+        adjusted,
+        saturated_used,
+        actual_mode,
+        moist_condensible,
+        thermal_notes,
+    )
 
 
 def solve_planet(
@@ -244,8 +448,11 @@ def solve_planet(
     cloud_optical_wave = np.linspace(360e-9, 830e-9, 13)
     incident = _interpolate_star(star, visible_wave)
     area = 4.0 * np.pi * planet.radius_m**2
-    profile_model = "isothermal_fast"
+    profile_model = "isothermal"
     convective_adjusted = np.zeros(cfg.resolved_layers, dtype=bool)
+    saturated_constraint = np.zeros(cfg.resolved_layers, dtype=bool)
+    moist_condensible: str | None = None
+    thermal_notes: tuple[str, ...] = ()
     tau_lw = 0.0
 
     for iteration in range(1, cfg.max_iterations + 1):
@@ -290,11 +497,19 @@ def solve_planet(
             area_m2=area,
             database=database,
         )
-        profile_iter, convective_adjusted, profile_model = _build_atmospheric_profile(
+        (
+            profile_iter,
+            convective_adjusted,
+            saturated_constraint,
+            profile_model,
+            moist_condensible,
+            thermal_notes,
+        ) = _build_atmospheric_profile(
             planet=planet,
             settings=cfg,
             surface_temperature_k=temperature,
             mole_fractions=composition,
+            phase=phase,
             longwave_optical_depth_surface=tau_lw,
             database=database,
         )
@@ -408,8 +623,11 @@ def solve_planet(
                 "surface_precipitation_kg_m2_step": float(
                     vertical.surface_precipitation_kg_m2
                 ),
-                "dry_convective_adjusted_layers": float(
+                "convective_adjusted_layers": float(
                     np.count_nonzero(convective_adjusted)
+                ),
+                "saturated_constraint_layers": float(
+                    np.count_nonzero(saturated_constraint)
                 ),
                 "profile_temperature_range_k": float(
                     np.ptp(profile_iter.temperature_k)
@@ -440,11 +658,19 @@ def solve_planet(
         area_m2=area,
         database=database,
     )
-    profile, convective_adjusted, profile_model = _build_atmospheric_profile(
+    (
+        profile,
+        convective_adjusted,
+        saturated_constraint,
+        profile_model,
+        moist_condensible,
+        thermal_notes,
+    ) = _build_atmospheric_profile(
         planet=planet,
         settings=cfg,
         surface_temperature_k=temperature,
         mole_fractions=previous_composition,
+        phase=phase,
         longwave_optical_depth_surface=tau_lw,
         database=database,
     )
@@ -546,8 +772,13 @@ def solve_planet(
     )
     dry_gradient = (
         None
-        if profile_model == "isothermal_fast"
+        if profile_model == "isothermal"
         else dry_adiabatic_log_pressure_gradient(previous_composition, database)
+    )
+    combined_fallbacks = tuple(
+        dict.fromkeys(
+            (*phase.fallbacks, *vertical.fallbacks, *thermal_notes)
+        )
     )
     diagnostics = {
         "finite": bool(
@@ -567,17 +798,28 @@ def solve_planet(
             vertical.reevaporation_latent_cooling_w_m2
         ),
         "chemistry": chemistry_meta,
-        "fallbacks": tuple(phase.fallbacks) + tuple(vertical.fallbacks),
+        "fallbacks": combined_fallbacks,
+        "thermal_fallbacks": thermal_notes,
         "liquid_phase_count": len(phase.liquid_phases),
         "activity_model": phase.activity_model,
         "vertical_transport_mode": cfg.vertical_transport_mode,
         "cloud_process_model": vertical.model,
+        "temperature_profile_requested_mode": cfg.temperature_profile_mode,
         "temperature_profile_model": profile_model,
         "temperature_profile_range_k": float(np.ptp(profile.temperature_k)),
-        "dry_convective_adjusted_layers": int(
+        "convective_adjusted_layers": int(
             np.count_nonzero(convective_adjusted)
         ),
+        "saturated_convective_constraint_layers": int(
+            np.count_nonzero(saturated_constraint)
+        ),
+        "moist_condensible": moist_condensible,
         "dry_adiabatic_log_pressure_gradient": dry_gradient,
+        "gray_optical_depth_pressure_exponent": (
+            None
+            if profile_model == "isothermal"
+            else cfg.gray_optical_depth_pressure_exponent
+        ),
     }
     provenance = {
         "atmogen_version": __version__,
@@ -587,6 +829,20 @@ def solve_planet(
         "fidelity": cfg.fidelity.value,
         "chemistry_mode": cfg.chemistry_mode,
         "radiation_mode": cfg.radiation_mode,
+        "temperature_profile_mode_requested": cfg.temperature_profile_mode,
+        "temperature_profile_model": profile_model,
+        "gray_optical_depth_pressure_exponent": (
+            cfg.gray_optical_depth_pressure_exponent
+        ),
+        "moist_condensible_requested": cfg.moist_condensible,
+        "moist_condensible_selected": moist_condensible,
+        "moist_saturation_threshold": cfg.moist_saturation_threshold,
+        "moist_max_saturation_mixing_ratio": (
+            cfg.moist_max_saturation_mixing_ratio
+        ),
+        "moist_allow_estimated_saturation": (
+            cfg.moist_allow_estimated_saturation
+        ),
         "cloud_mode": cfg.cloud_mode,
         "activity_model_requested": cfg.activity_model,
         "liquid_phase_split": cfg.liquid_phase_split,
@@ -603,12 +859,6 @@ def solve_planet(
         "cloud_refractive_index_imag": cfg.cloud_refractive_index_imag,
         "cloud_microphysics_timestep_s": cfg.cloud_microphysics_timestep_s,
         "cloud_reevaporation_timescale_s": cfg.cloud_reevaporation_timescale_s,
-        "temperature_profile_model": profile_model,
-        "gray_optical_depth_pressure_exponent": (
-            None
-            if profile_model == "isothermal_fast"
-            else DEFAULT_GRAY_OPTICAL_DEPTH_PRESSURE_EXPONENT
-        ),
         "stellar_spectrum": star.provenance,
         "condensable_vertical_depletion_factor_fast": 0.35,
         "surface_vapor_band_optical_depth_cap_fast": 1.5,
@@ -616,15 +866,16 @@ def solve_planet(
             "uniform condensate-to-air mass ratio over a bounded suspended column"
         ),
         "latent_heat_semantics": (
-            "re-evaporation latent cooling is diagnostic redistribution until "
-            "layerwise energy integration is enabled"
+            "saturated profile uses a single-condensable dilute approximate lapse "
+            "constraint where eligible; precipitation re-evaporation latent cooling "
+            "remains diagnostic redistribution until layerwise energy integration"
         ),
         "limitations": (
             "semi-gray longwave, fixed-pressure reservoir coupling, ideal-volume "
             "liquid density, bulk cold-trap depletion, reduced-order cloud source, "
-            "and dry rather than moist radiative-convective adjustment remain "
-            "approximations; layerwise radiative energy-flux convergence is not "
-            "yet solved"
+            "single-condensable dilute saturated adjustment, no solid-phase moist "
+            "adiabat without separate sublimation latent heat, and no layerwise "
+            "radiative energy-flux convergence remain approximations"
         ),
     }
     return PlanetChemistryResult(
