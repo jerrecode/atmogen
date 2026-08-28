@@ -44,7 +44,12 @@ Wyman et al. analytic fit to the CIE 1931 2-degree functions.
 
 The current square-root-column longwave coefficients (an empirical band-saturation
 proxy with implied units of `(kg m⁻²)^-1/2`), non-water vapor-pressure relations, and bulk
-cloud suspension are explicitly reduced-order estimates. Version 0.1 does **not**
+cloud suspension are explicitly reduced-order estimates. FAST condensable opacity
+applies a recorded 0.35 bulk vertical-depletion factor because surface saturation is
+not vertically uniform, and a smooth optical-depth cap of 1.5 represents overlapping
+saturated bands for surface-supplied trace vapor. These are not substitutes for a
+resolved moist adiabat and band radiative transfer.
+Version 0.1 does **not**
 claim non-ideal activity models, liquid-liquid separation, kinetics, photolysis,
 vertical diffusion, Mie scattering, correlated-k, line-by-line transfer, or a full
 radiative-convective/3-D climate solution. `HIGH` and `REFERENCE` currently increase

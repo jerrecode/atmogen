@@ -101,7 +101,12 @@ def solve_planet(*, planet: PlanetPhysicalState, star: StellarSpectrum, inventor
                                         gravity_m_s2=planet.gravity_m_s2,
                                         mole_fractions=composition,
                                         additional_species_column_kg_m2={
-                                            key: mass / area for key, mass in phase.atmospheric_mass_kg.items()
+                                            # Surface saturation is not vertically uniform: a
+                                            # convecting column cools upward and cold-traps vapor.
+                                            # FAST mode uses a documented bulk depletion factor;
+                                            # later radiative-convective backends will integrate
+                                            # the resolved saturation profile instead.
+                                            key: 0.35 * mass / area for key, mass in phase.atmospheric_mass_kg.items()
                                         }, database=database)
         target = teff * (1.0 + 0.75 * tau_lw) ** 0.25
         target = float(np.clip(target, 20.0, 4000.0))
@@ -148,7 +153,9 @@ def solve_planet(*, planet: PlanetPhysicalState, star: StellarSpectrum, inventor
                   "fidelity": cfg.fidelity.value, "chemistry_mode": cfg.chemistry_mode,
                   "radiation_mode": cfg.radiation_mode, "cloud_mode": cfg.cloud_mode,
                   "stellar_spectrum": star.provenance,
-                  "limitations": "semi-gray longwave and bulk equilibrium cloud are reduced-order models"}
+                  "condensable_vertical_depletion_factor_fast": 0.35,
+                  "surface_vapor_band_optical_depth_cap_fast": 1.5,
+                  "limitations": "semi-gray longwave, bulk cold-trap depletion and equilibrium cloud are reduced-order models"}
     return PlanetChemistryResult(profile, phase, cloud, spectra, budget, convergence, diagnostics, provenance)
 
 

@@ -22,6 +22,7 @@ def test_complete_column_is_finite_closed_converged_and_deterministic():
     assert a.surface.mass_closure_relative < 1e-12
     assert abs(a.energy_budget.imbalance_w_m2) < 1e-9
     assert 0 <= a.spectra.bond_albedo < 1
+    assert 260.0 <= float(a.atmosphere.temperature_k[0]) <= 320.0
     assert np.array_equal(a.atmosphere.pressure_pa, b.atmosphere.pressure_pa)
     assert a.spectra.visible_srgb == b.spectra.visible_srgb
 

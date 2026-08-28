@@ -106,5 +106,9 @@ def longwave_optical_depth(*, surface_pressure_pa: float, gravity_m_s2: float,
         species_column = max(column_mass * mass_fraction, 0.0)
         tau += database.get(key).longwave_column_coefficient_fast * np.sqrt(species_column)
     for key, species_column in (additional_species_column_kg_m2 or {}).items():
-        tau += database.get(key).longwave_column_coefficient_fast * np.sqrt(max(float(species_column), 0.0))
+        raw = database.get(key).longwave_column_coefficient_fast * np.sqrt(max(float(species_column), 0.0))
+        # A surface-supplied trace vapor cannot open unlimited independent gray
+        # bands. Smooth saturation prevents the FAST proxy from inventing a moist
+        # runaway solely because the same broad bands are counted repeatedly.
+        tau += 1.5 * raw / (1.5 + raw)
     return float(max(tau, 0.0))
