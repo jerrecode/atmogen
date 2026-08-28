@@ -95,9 +95,22 @@ class SolverSettings:
     top_pressure_pa: float = 0.1
     chemistry_mode: str = "equilibrium"  # equilibrium | fixed_species
     radiation_mode: str = "semi_gray_spectral_shortwave"
-    cloud_mode: str = "equilibrium_bulk"
+    cloud_mode: str = "equilibrium_bulk"  # equilibrium_bulk | lognormal_sedimentation
     activity_model: str = "auto"  # auto | ideal | nrtl
     liquid_phase_split: bool = True
+    vertical_transport_mode: str = "none"  # none | eddy_diffusion
+    eddy_diffusivity_m2_s: float = 50.0
+    cloud_suspended_fraction: float = 0.01
+    cloud_condensate_column_cap_kg_m2: float = 0.2
+    cloud_particle_median_radius_m: float = 10e-6
+    cloud_particle_geometric_std: float = 1.4
+    cloud_particle_density_kg_m3: float | None = None
+    cloud_refractive_index_real: float | None = None
+    cloud_refractive_index_imag: float = 0.0
+    gas_dynamic_viscosity_pa_s: float = 1.8e-5
+    cloud_microphysics_timestep_s: float = 3600.0
+    cloud_reevaporation_timescale_s: float | None = None
+    cloud_quadrature_order: int = 12
     max_iterations: int = 40
     relative_temperature_tolerance: float = 2e-5
     composition_tolerance: float = 1e-9
@@ -118,10 +131,43 @@ class SolverSettings:
             raise ValueError("top_pressure_pa must be positive")
         if self.chemistry_mode not in {"equilibrium", "fixed_species"}:
             raise ValueError("chemistry_mode must be equilibrium or fixed_species")
+        if self.cloud_mode not in {"equilibrium_bulk", "lognormal_sedimentation"}:
+            raise ValueError("cloud_mode must be equilibrium_bulk or lognormal_sedimentation")
         if self.activity_model not in {"auto", "ideal", "nrtl"}:
             raise ValueError("activity_model must be auto, ideal, or nrtl")
         if not isinstance(self.liquid_phase_split, bool):
             raise TypeError("liquid_phase_split must be bool")
+        if self.vertical_transport_mode not in {"none", "eddy_diffusion"}:
+            raise ValueError("vertical_transport_mode must be none or eddy_diffusion")
+        positive_names = (
+            "eddy_diffusivity_m2_s", "cloud_condensate_column_cap_kg_m2",
+            "cloud_particle_median_radius_m", "cloud_particle_geometric_std",
+            "gas_dynamic_viscosity_pa_s", "cloud_microphysics_timestep_s",
+        )
+        for name in positive_names:
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if not np.isfinite(self.cloud_suspended_fraction) or not 0 <= self.cloud_suspended_fraction <= 1:
+            raise ValueError("cloud_suspended_fraction must be in [0, 1]")
+        if self.cloud_particle_geometric_std < 1:
+            raise ValueError("cloud_particle_geometric_std must be at least 1")
+        if self.cloud_particle_density_kg_m3 is not None and (
+            not np.isfinite(self.cloud_particle_density_kg_m3) or self.cloud_particle_density_kg_m3 <= 0
+        ):
+            raise ValueError("cloud_particle_density_kg_m3 must be positive when supplied")
+        if self.cloud_refractive_index_real is not None and (
+            not np.isfinite(self.cloud_refractive_index_real) or self.cloud_refractive_index_real <= 0
+        ):
+            raise ValueError("cloud_refractive_index_real must be positive when supplied")
+        if not np.isfinite(self.cloud_refractive_index_imag) or self.cloud_refractive_index_imag < 0:
+            raise ValueError("cloud_refractive_index_imag must be finite and non-negative")
+        if self.cloud_reevaporation_timescale_s is not None and (
+            not np.isfinite(self.cloud_reevaporation_timescale_s) or self.cloud_reevaporation_timescale_s <= 0
+        ):
+            raise ValueError("cloud_reevaporation_timescale_s must be positive when supplied")
+        if not isinstance(self.cloud_quadrature_order, int) or not 1 <= self.cloud_quadrature_order <= 128:
+            raise ValueError("cloud_quadrature_order must be an integer in [1, 128]")
         if self.max_iterations < 1:
             raise ValueError("max_iterations must be positive")
         if not 0 < self.relaxation <= 1:
@@ -177,6 +223,31 @@ class CloudResult:
 
 
 @dataclass(frozen=True, slots=True)
+class VerticalProcessResult:
+    layer_thickness_m: NDArray[np.float64]
+    eddy_diffusivity_m2_s: NDArray[np.float64]
+    mixing_timescale_s: NDArray[np.float64]
+    cloud_condensate_kg_m2: NDArray[np.float64]
+    cloud_mass_concentration_kg_m3: NDArray[np.float64]
+    cloud_number_concentration_m3: NDArray[np.float64]
+    cloud_settling_velocity_m_s: NDArray[np.float64]
+    cloud_sedimentation_flux_kg_m2_s: NDArray[np.float64]
+    optical_wavelength_m: NDArray[np.float64]
+    cloud_extinction_m_inv: NDArray[np.float64]
+    cloud_scattering_m_inv: NDArray[np.float64]
+    cloud_absorption_m_inv: NDArray[np.float64]
+    cloud_single_scattering_albedo: NDArray[np.float64]
+    cloud_asymmetry_g: NDArray[np.float64]
+    precipitation_downward_kg_m2: NDArray[np.float64]
+    precipitation_reevaporated_kg_m2: NDArray[np.float64]
+    surface_precipitation_kg_m2: float
+    reevaporation_latent_cooling_w_m2: float
+    mass_closure_relative: float
+    model: str
+    fallbacks: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class SpectralResult:
     shortwave_wavelength_m: NDArray[np.float64]
     incident_shortwave_w_m2_m: NDArray[np.float64]
@@ -216,6 +287,7 @@ class PlanetChemistryResult:
     atmosphere: AtmosphericProfile
     surface: PhaseReservoirResult
     clouds: CloudResult
+    vertical: VerticalProcessResult
     spectra: SpectralResult
     energy_budget: EnergyBudget
     convergence: ConvergenceReport
