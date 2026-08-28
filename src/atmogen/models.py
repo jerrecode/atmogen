@@ -95,6 +95,12 @@ class SolverSettings:
     top_pressure_pa: float = 0.1
     chemistry_mode: str = "equilibrium"  # equilibrium | fixed_species
     radiation_mode: str = "semi_gray_spectral_shortwave"
+    temperature_profile_mode: str = "auto"  # auto | isothermal | dry_radiative_convective | dilute_saturated
+    gray_optical_depth_pressure_exponent: float = 2.0
+    moist_condensible: str = "auto"
+    moist_saturation_threshold: float = 0.90
+    moist_max_saturation_mixing_ratio: float = 0.25
+    moist_allow_estimated_saturation: bool = False
     cloud_mode: str = "equilibrium_bulk"  # equilibrium_bulk | lognormal_sedimentation
     activity_model: str = "auto"  # auto | ideal | nrtl
     liquid_phase_split: bool = True
@@ -131,6 +137,23 @@ class SolverSettings:
             raise ValueError("top_pressure_pa must be positive")
         if self.chemistry_mode not in {"equilibrium", "fixed_species"}:
             raise ValueError("chemistry_mode must be equilibrium or fixed_species")
+        if self.temperature_profile_mode not in {
+            "auto", "isothermal", "dry_radiative_convective", "dilute_saturated"
+        }:
+            raise ValueError(
+                "temperature_profile_mode must be auto, isothermal, "
+                "dry_radiative_convective, or dilute_saturated"
+            )
+        if not np.isfinite(self.gray_optical_depth_pressure_exponent) or self.gray_optical_depth_pressure_exponent <= 0:
+            raise ValueError("gray_optical_depth_pressure_exponent must be finite and positive")
+        if not isinstance(self.moist_condensible, str) or not self.moist_condensible:
+            raise TypeError("moist_condensible must be a non-empty string")
+        if not np.isfinite(self.moist_saturation_threshold) or not 0 < self.moist_saturation_threshold <= 1:
+            raise ValueError("moist_saturation_threshold must be in (0, 1]")
+        if not np.isfinite(self.moist_max_saturation_mixing_ratio) or not 0 < self.moist_max_saturation_mixing_ratio <= 1:
+            raise ValueError("moist_max_saturation_mixing_ratio must be in (0, 1]")
+        if not isinstance(self.moist_allow_estimated_saturation, bool):
+            raise TypeError("moist_allow_estimated_saturation must be bool")
         if self.cloud_mode not in {"equilibrium_bulk", "lognormal_sedimentation"}:
             raise ValueError("cloud_mode must be equilibrium_bulk or lognormal_sedimentation")
         if self.activity_model not in {"auto", "ideal", "nrtl"}:
