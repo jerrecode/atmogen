@@ -178,6 +178,10 @@ def _resolved_temperature_profile_mode(settings: SolverSettings) -> str:
     return "dilute_saturated"
 
 
+def _is_isothermal_profile(model: str) -> bool:
+    return str(model).startswith("isothermal")
+
+
 def _select_moist_condensible(
     *,
     planet: PlanetPhysicalState,
@@ -313,7 +317,13 @@ def _build_atmospheric_profile(
             layers=settings.resolved_layers,
             database=database,
         )
-        return profile, empty, empty.copy(), "isothermal", None, ()
+        model = (
+            "isothermal_fast"
+            if settings.fidelity is Fidelity.FAST
+            and settings.temperature_profile_mode == "auto"
+            else "isothermal"
+        )
+        return profile, empty, empty.copy(), model, None, ()
 
     pressure_interfaces = logarithmic_pressure_interfaces(
         planet.surface_pressure_pa,
@@ -448,7 +458,7 @@ def solve_planet(
     cloud_optical_wave = np.linspace(360e-9, 830e-9, 13)
     incident = _interpolate_star(star, visible_wave)
     area = 4.0 * np.pi * planet.radius_m**2
-    profile_model = "isothermal"
+    profile_model = "isothermal_fast"
     convective_adjusted = np.zeros(cfg.resolved_layers, dtype=bool)
     saturated_constraint = np.zeros(cfg.resolved_layers, dtype=bool)
     moist_condensible: str | None = None
@@ -614,6 +624,7 @@ def solve_planet(
         energy_imbalance = (
             absorbed + planet.internal_heat_flux_w_m2 - outgoing
         )
+        adjusted_count = float(np.count_nonzero(convective_adjusted))
         history.append(
             {
                 "temperature_relative": relative_t,
@@ -623,9 +634,8 @@ def solve_planet(
                 "surface_precipitation_kg_m2_step": float(
                     vertical.surface_precipitation_kg_m2
                 ),
-                "convective_adjusted_layers": float(
-                    np.count_nonzero(convective_adjusted)
-                ),
+                "convective_adjusted_layers": adjusted_count,
+                "dry_convective_adjusted_layers": adjusted_count,
                 "saturated_constraint_layers": float(
                     np.count_nonzero(saturated_constraint)
                 ),
@@ -772,7 +782,7 @@ def solve_planet(
     )
     dry_gradient = (
         None
-        if profile_model == "isothermal"
+        if _is_isothermal_profile(profile_model)
         else dry_adiabatic_log_pressure_gradient(previous_composition, database)
     )
     combined_fallbacks = tuple(
@@ -780,6 +790,7 @@ def solve_planet(
             (*phase.fallbacks, *vertical.fallbacks, *thermal_notes)
         )
     )
+    adjusted_count = int(np.count_nonzero(convective_adjusted))
     diagnostics = {
         "finite": bool(
             np.isfinite(profile.pressure_pa).all()
@@ -807,9 +818,8 @@ def solve_planet(
         "temperature_profile_requested_mode": cfg.temperature_profile_mode,
         "temperature_profile_model": profile_model,
         "temperature_profile_range_k": float(np.ptp(profile.temperature_k)),
-        "convective_adjusted_layers": int(
-            np.count_nonzero(convective_adjusted)
-        ),
+        "convective_adjusted_layers": adjusted_count,
+        "dry_convective_adjusted_layers": adjusted_count,
         "saturated_convective_constraint_layers": int(
             np.count_nonzero(saturated_constraint)
         ),
@@ -817,7 +827,7 @@ def solve_planet(
         "dry_adiabatic_log_pressure_gradient": dry_gradient,
         "gray_optical_depth_pressure_exponent": (
             None
-            if profile_model == "isothermal"
+            if _is_isothermal_profile(profile_model)
             else cfg.gray_optical_depth_pressure_exponent
         ),
     }
