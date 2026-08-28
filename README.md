@@ -2,8 +2,9 @@
 
 `atmogen` is a deterministic, standalone vertical atmosphere/material solver for
 procedural planets. It owns local hydrostatics, compact thermochemical equilibrium,
-surface phase partitioning, bulk cloud condensate, and reduced-order spectral
-radiation. It does not import or depend on a world generator.
+surface gas/liquid/solid partitioning, multicomponent liquid activity/stability,
+bulk cloud condensate, and reduced-order spectral radiation. It does not import or
+depend on a world generator.
 
 ```python
 from atmogen import *
@@ -26,13 +27,23 @@ representative column.
 
 ## Implemented physics
 
-The 0.1 API implements a logarithmic-pressure grid; analytic ideal-gas isothermal
-hydrostatics; element-constrained ideal-mixture Gibbs minimization; IAPWS-form water
-saturation; bounded estimated vapor-pressure fallbacks for CO2, CH4 and NH3;
-mass-conserving gas/liquid/solid surface partitioning; wavelength-resolved
-Rayleigh and Beer–Lambert shortwave transfer; semi-gray longwave balance; Planck
-thermal spectra; Fresnel normal-incidence reflection; and CIE-1931-fitted sRGB.
-Batch calls de-duplicate identical input states.
+Version 0.4 implements a logarithmic-pressure vertical grid; analytic ideal-gas
+isothermal hydrostatics; element-constrained ideal-mixture Gibbs minimization;
+IAPWS-form water saturation; bounded estimated vapor-pressure fallbacks for several
+bundled condensables; mass-conserving finite gas/liquid/solid surface partitioning;
+multicomponent liquid activities through an explicit ideal/NRTL backend interface;
+liquid-liquid Gibbs phase-stability testing; wavelength-resolved Rayleigh and
+Beer-Lambert shortwave transfer; semi-gray longwave balance; Planck thermal spectra;
+CIE-1931-fitted sRGB; complex-index absorption; Lorentz-Lorenz effective-medium
+mixing; angular/polarized Fresnel reflectance from a non-absorbing incident medium;
+and homogeneous-sphere Lorenz-Mie scattering with a Wiscombe-style downward
+logarithmic-derivative recurrence. Batch calls de-duplicate identical input states.
+
+The Mie API returns `Q_sca`, `Q_abs`, `Q_ext`, backscatter efficiency, asymmetry
+parameter `g`, single-scattering albedo, size parameter and series length. Regression
+tests include the Bohren-Huffman/Wiscombe absorbing-sphere cases at size parameters
+`x=1` and `x=100`, the Rayleigh small-particle limit, and non-absorbing energy
+partition.
 
 ## Scientific data and limits
 
@@ -42,25 +53,43 @@ Water saturation follows the IAPWS release form. Rayleigh follows the expected
 species-dependent wavelength-to-the-minus-four limit. CIE conversion uses the
 Wyman et al. analytic fit to the CIE 1931 2-degree functions.
 
-The current square-root-column longwave coefficients (an empirical band-saturation
-proxy with implied units of `(kg m⁻²)^-1/2`), non-water vapor-pressure relations, and bulk
-cloud suspension are explicitly reduced-order estimates. FAST condensable opacity
-applies a recorded 0.35 bulk vertical-depletion factor because surface saturation is
-not vertically uniform, and a smooth optical-depth cap of 1.5 represents overlapping
-saturated bands for surface-supplied trace vapor. These are not substitutes for a
+NRTL is implemented as a solver backend and data schema, but the bundled database
+does not fabricate binary interaction coefficients. `auto` therefore falls back to
+an ideal liquid model when a complete directed parameter set is unavailable and
+records that fallback. Custom/scientific databases may provide sourced NRTL
+interaction energies, alpha parameters, provenance and validity metadata.
+
+The current liquid-density calculation remains ideal-volume additive. Surface
+pressure remains a prescribed boundary rather than a fully solved total-reservoir
+pressure. The square-root-column longwave coefficients, non-water vapor-pressure
+relations, and bulk cloud suspension are explicitly reduced-order estimates. FAST
+condensable opacity applies a recorded bulk vertical-depletion factor because
+surface saturation is not vertically uniform; this is not a substitute for a
 resolved moist adiabat and band radiative transfer.
-Version 0.1 does **not**
-claim non-ideal activity models, liquid-liquid separation, kinetics, photolysis,
-vertical diffusion, Mie scattering, correlated-k, line-by-line transfer, or a full
-radiative-convective/3-D climate solution. `HIGH` and `REFERENCE` currently increase
-vertical resolution but do not falsely activate unavailable high-fidelity backends.
+
+The Mie/Fresnel primitives are not yet automatically applied to clouds or ocean
+rendering because the bundled material database does not yet contain a sufficiently
+sourced wavelength-dependent complex refractive-index dataset. This is intentional:
+the solver exposes the physical machinery without inventing authoritative RGB or
+optical constants for missing materials.
+
+Version 0.4 does **not** claim stiff kinetics, photolysis, vertical diffusion,
+resolved cloud microphysics, sedimentation/precipitation, correlated-k,
+line-by-line transfer, or a full radiative-convective/3-D climate solution. `HIGH`
+and `REFERENCE` currently increase vertical resolution but do not falsely activate
+unavailable high-fidelity backends.
 
 Primary references:
 
 - NIST Chemistry WebBook, gas thermochemistry and Shomate definitions:
   https://webbook.nist.gov/
-- IAPWS-95 and saturation-property releases: https://iapws.org/documents/release
+- IAPWS thermodynamic/saturation releases: https://iapws.org/documents/release
 - Bodhaine et al. (1999), *On Rayleigh Optical Depth Calculations*.
+- Bohren & Huffman (1983), *Absorption and Scattering of Light by Small Particles*.
+- Wiscombe (1980), improved Mie scattering algorithms and large-size-parameter
+  numerical treatment.
+- Scott Prahl / OMLC Mie implementation and equation documentation:
+  https://omlc.org/software/mie/
 - CIE 018:2019, CIE 1931 2-degree colour-matching functions:
   https://cie.co.at/datatable/cie-1931-colour-matching-functions-2-degree-observer
 - Wyman, Sloan & Shirley (2013), analytic approximations to CIE XYZ functions.
@@ -68,6 +97,6 @@ Primary references:
 ## Reproducibility
 
 Results record package version, API schema, material-data schema and database hash,
-solver modes, fidelity, stellar-spectrum provenance, fallbacks, conservation
-residuals, hydrostatic residual, energy imbalance, and convergence history. No
-global random number generator is used.
+solver modes, fidelity, stellar-spectrum provenance, liquid-activity model,
+fallbacks, conservation residuals, hydrostatic residual, energy imbalance, and
+convergence history. No global random number generator is used.
