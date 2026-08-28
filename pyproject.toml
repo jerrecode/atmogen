@@ -18,7 +18,7 @@ dev = ["pytest>=8", "build>=1.2"]
 atmogen = "atmogen.cli:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"]
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
