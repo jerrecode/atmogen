@@ -15,3 +15,10 @@ def test_partition_conserves_surface_reservoir_mass():
     assert result.mass_closure_relative < 1e-14
     assert result.liquid_mass_kg["H2O"] > 0
     assert result.liquid_volume_m3["H2O"] > 0
+
+
+def test_worldgen_regression_condensables_have_explicit_models():
+    for species, temperature in (("CH4", 94.0), ("C2H6", 94.0), ("SO2", 250.0)):
+        pressure, note = saturation_pressure_pa(species, temperature)
+        assert pressure is not None and pressure >= 0
+        assert note and "estimated" in note

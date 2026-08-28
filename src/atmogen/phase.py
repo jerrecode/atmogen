@@ -26,6 +26,8 @@ def saturation_pressure_pa(species: str, temperature_k: float) -> tuple[float | 
         "CO2": (216.58, 5.18e5, 5.74e5, 44.0095e-3),
         "CH4": (90.69, 1.17e4, 5.10e5, 16.0425e-3),
         "NH3": (195.40, 6.06e3, 1.37e6, 17.03052e-3),
+        "C2H6": (90.35, 1.1, 4.89e5, 30.0690e-3),
+        "SO2": (197.67, 1.67e4, 3.89e5, 64.066e-3),
     }
     if species in anchors:
         tref, pref, latent, mm = anchors[species]
