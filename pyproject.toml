@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atmogen"
-version = "0.8.0"
-description = "Deterministic vertical atmosphere, reservoir, chemistry, and spectral-radiation solver for procedural planets"
+version = "0.9.0"
+description = "Deterministic vertical atmosphere, reservoir, chemistry, cloud microphysics, radiative-convective structure, and spectral-radiation solver for procedural planets"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -18,7 +18,7 @@ dev = ["pytest>=8", "build>=1.2"]
 atmogen = "atmogen.cli:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"" = "src"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
