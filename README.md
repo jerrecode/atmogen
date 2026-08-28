@@ -3,9 +3,9 @@
 `atmogen` is a deterministic, standalone vertical atmosphere/material solver for
 procedural planets. It owns local hydrostatics, compact thermochemical equilibrium,
 surface gas/liquid/solid partitioning, multicomponent liquid activity/stability,
-local stiff reaction kinetics and spectral photolysis primitives, optical material
-physics, bulk cloud condensate, and reduced-order spectral radiation. It does not
-import or depend on a world generator.
+local stiff reaction kinetics, spectral photolysis, vertical eddy transport and
+quench diagnostics, optical material physics, bulk cloud condensate, and
+reduced-order spectral radiation. It does not import or depend on a world generator.
 
 ```python
 from atmogen import *
@@ -28,7 +28,7 @@ representative column.
 
 ## Implemented physics
 
-Version 0.5 implements a logarithmic-pressure vertical grid; analytic ideal-gas
+Version 0.6 implements a logarithmic-pressure vertical grid; analytic ideal-gas
 isothermal hydrostatics; element-constrained ideal-mixture Gibbs minimization;
 IAPWS-form water saturation; bounded estimated vapor-pressure fallbacks for several
 bundled condensables; mass-conserving finite gas/liquid/solid surface partitioning;
@@ -39,9 +39,9 @@ CIE-1931-fitted sRGB; complex-index absorption; Lorentz-Lorenz effective-medium
 mixing; angular/polarized Fresnel reflectance; and homogeneous-sphere Lorenz-Mie
 scattering with a Wiscombe-style downward logarithmic-derivative recurrence.
 
-The local chemistry layer now also provides an explicit reaction-data model,
-stoichiometric elemental-balance validation, Arrhenius mass-action rates, externally
-forced first-order photolysis reactions, and stiff BDF/Radau integration using
+The local chemistry layer provides an explicit reaction-data model, stoichiometric
+elemental-balance validation, Arrhenius mass-action rates, externally forced
+first-order photolysis reactions, and stiff BDF/Radau integration using
 `scipy.integrate.solve_ivp`. Concentrations use mol m^-3 and volumetric rates use
 mol m^-3 s^-1. Solver success is independently checked for significant negative
 concentrations and elemental closure.
@@ -55,6 +55,27 @@ flux. A Beer-Lambert column helper produces altitude-dependent J values from
 cumulative optical depth. The kinetics API accepts these J values explicitly, which
 keeps chemistry independent of whichever radiative-transfer backend produced the
 actinic spectrum.
+
+Vertical transport now provides a conservative finite-volume implementation of the
+eddy mixing-ratio flux
+
+`Phi_i = -Kzz * n * d f_i / dz`
+
+on arbitrary increasing altitude interfaces. Each tracer is integrated with BDF or
+Radau under zero-flux upper/lower boundaries, preserving its column inventory while
+allowing nonuniform molar-density and Kzz profiles. A complete set of tracers sharing
+the same Kzz preserves `sum(f_i)=1` apart from numerical tolerance. The transport
+API accepts scalar, layer, or interface Kzz values; layer values are harmonically
+averaged to interfaces.
+
+Quenching is not assigned at an arbitrary altitude. `quench_diagnostic` compares a
+caller-derived chemical timescale with
+
+`tau_mix = L_mix^2 / Kzz`
+
+and reports transport-dominated levels plus timescale-crossing indices. This lets a
+later coupled chemistry/transport iteration derive a quench region from actual
+kinetics and mixing rather than configuration folklore.
 
 The Mie API returns `Q_sca`, `Q_abs`, `Q_ext`, backscatter efficiency, asymmetry
 parameter `g`, single-scattering albedo, size parameter and series length. Regression
@@ -82,6 +103,14 @@ coefficients, photolysis cross sections and quantum yields with explicit validit
 ranges. Tests use synthetic coefficients only when an analytical solution or
 numerical invariant is the object being validated.
 
+Kzz is currently supplied by the caller rather than inferred universally from one
+planet formula. This is intentional: effective eddy diffusivity is strongly regime
+and circulation dependent, and worldgen or a future convective/radiative column
+backend should derive or prescribe it with explicit provenance. The current
+transport operator includes eddy diffusion only; molecular diffusion, gravitational
+separation, escape flux, chemistry source terms and condensate sedimentation remain
+separate operators to be coupled subsequently.
+
 The current liquid-density calculation remains ideal-volume additive. Surface
 pressure remains a prescribed boundary rather than a fully solved total-reservoir
 pressure. The square-root-column longwave coefficients, non-water vapor-pressure
@@ -93,14 +122,14 @@ resolved moist adiabat and band radiative transfer.
 The Mie/Fresnel primitives are not yet automatically applied to clouds or ocean
 rendering because the bundled material database does not yet contain a sufficiently
 sourced wavelength-dependent complex refractive-index dataset. Similarly, the
-photolysis primitives are not yet part of the top-level coupled `solve_planet`
-iteration because a sourced reaction/cross-section network and resolved UV actinic
-radiative transfer have not yet been bundled. These limitations are intentional:
-the engine exposes physically defined solver layers without disguising invented
+photolysis/kinetics/transport primitives are not yet activated in the top-level
+`solve_planet` iteration because a sourced network plus resolved UV actinic flux and
+mixing profile have not yet been bundled. These limitations are intentional: the
+engine exposes physically defined solver layers without disguising invented
 coefficients as laboratory data.
 
-Version 0.5 does **not** claim a bundled planetary kinetic network, vertical eddy
-diffusion/quenching, resolved cloud microphysics, sedimentation/precipitation,
+Version 0.6 does **not** claim a bundled planetary kinetic network, molecular
+vertical diffusion, resolved cloud microphysics, sedimentation/precipitation,
 correlated-k, line-by-line transfer, or a full radiative-convective/3-D climate
 solution. `HIGH` and `REFERENCE` currently increase vertical resolution but do not
 falsely activate unavailable high-fidelity backends.
@@ -112,6 +141,8 @@ Primary references:
 - IAPWS thermodynamic/saturation releases: https://iapws.org/documents/release
 - SciPy `solve_ivp` documentation for implicit BDF/Radau stiff integration:
   https://docs.scipy.org/doc/scipy/reference/generated/scipy.integrate.solve_ivp.html
+- Zhang & Showman and related planetary-atmosphere literature for effective Kzz
+  flux-gradient transport and chemical/mixing-timescale quenching concepts.
 - Bodhaine et al. (1999), *On Rayleigh Optical Depth Calculations*.
 - Bohren & Huffman (1983), *Absorption and Scattering of Light by Small Particles*.
 - Wiscombe (1980), improved Mie scattering algorithms and large-size-parameter
@@ -128,4 +159,5 @@ Results record package version, API schema, material-data schema and database ha
 solver modes, fidelity, stellar-spectrum provenance, liquid-activity model,
 fallbacks, conservation residuals, hydrostatic residual, energy imbalance, and
 convergence history. Reaction-network data participate in the database revision
-hash. No global random number generator is used.
+hash. Standalone kinetics and transport results expose integrator diagnostics and
+conservation residuals. No global random number generator is used.
