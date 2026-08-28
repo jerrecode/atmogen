@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 import hashlib
 import json
-from typing import Mapping
+from typing import Iterable, Mapping
 
 import numpy as np
 
@@ -50,17 +50,61 @@ class Species:
         return float(h - t * s)
 
 
+@dataclass(frozen=True, slots=True)
+class NRTLInteraction:
+    """Directed binary interaction for an isothermal NRTL activity model.
+
+    ``delta_g_ij_j_mol`` is converted to ``tau_ij = delta_g_ij / (R T)``.
+    Parameters are deliberately external scientific data: the builtin validation
+    database does not invent coefficients for pairs whose values have not been
+    sourced and checked.
+    """
+
+    component_i: str
+    component_j: str
+    delta_g_ij_j_mol: float
+    alpha: float
+    provenance_class: ProvenanceClass
+    source: str
+    validity: str
+
+    def __post_init__(self) -> None:
+        if not self.component_i or not self.component_j or self.component_i == self.component_j:
+            raise ValueError("NRTL interaction requires two distinct component keys")
+        if not np.isfinite(self.delta_g_ij_j_mol):
+            raise ValueError("delta_g_ij_j_mol must be finite")
+        if not np.isfinite(self.alpha) or self.alpha < 0:
+            raise ValueError("NRTL alpha must be finite and non-negative")
+
+
 class ChemicalDatabase:
     """Versioned, immutable scientific-data view used by solver backends."""
 
-    def __init__(self, species: Mapping[str, Species]) -> None:
+    def __init__(self, species: Mapping[str, Species],
+                 nrtl_interactions: Iterable[NRTLInteraction] = ()) -> None:
         self._species = dict(species)
         if len(self._species) != len(set(self._species)):
             raise ValueError("duplicate species keys")
+        interactions: dict[tuple[str, str], NRTLInteraction] = {}
+        for item in nrtl_interactions:
+            key = (canonical_species(item.component_i), canonical_species(item.component_j))
+            if key in interactions:
+                raise ValueError(f"duplicate NRTL interaction {key!r}")
+            if key[0] not in self._species or key[1] not in self._species:
+                raise ValueError(f"NRTL interaction references unknown species {key!r}")
+            interactions[key] = NRTLInteraction(
+                key[0], key[1], item.delta_g_ij_j_mol, item.alpha,
+                item.provenance_class, item.source, item.validity,
+            )
+        self._nrtl_interactions = interactions
 
     @property
     def species(self) -> Mapping[str, Species]:
         return self._species
+
+    @property
+    def nrtl_interactions(self) -> Mapping[tuple[str, str], NRTLInteraction]:
+        return self._nrtl_interactions
 
     def get(self, key: str) -> Species:
         canonical = canonical_species(key)
@@ -74,6 +118,10 @@ class ChemicalDatabase:
         payload = {
             "schema": DATA_SCHEMA_VERSION,
             "species": {key: asdict(value) for key, value in sorted(self._species.items())},
+            "nrtl_interactions": {
+                f"{key[0]}->{key[1]}": asdict(value)
+                for key, value in sorted(self._nrtl_interactions.items())
+            },
         }
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
         return hashlib.sha256(raw).hexdigest()
@@ -98,7 +146,8 @@ def _sp(key: str, formula: Mapping[str, int], mm: float, phase: str, hf: float, 
 # Thermochemistry is compact validation data, not a replacement for temperature-
 # segmented NASA/Shomate tables. Optical longwave coefficients are explicitly
 # ESTIMATED square-root-column screening coefficients and never exposed as
-# measured mass-absorption constants.
+# measured mass-absorption constants. NRTL parameters are intentionally absent
+# until a source and validity range are explicitly recorded for a pair.
 BUILTIN_DATABASE = ChemicalDatabase({
     "H2": _sp("H2", {"H": 2}, 2.01588e-3, "gas", 0.0, 130.68, 28.84, 13.99, 33.15, 70.8, 4.46e5, 8.5e-32, 1e-5),
     "He": _sp("He", {"He": 1}, 4.002602e-3, "gas", 0.0, 126.15, 20.79, None, 5.20, 125.0, 2.1e4, 1.0e-32, 0.0),
