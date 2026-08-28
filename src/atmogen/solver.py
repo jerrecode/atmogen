@@ -135,7 +135,7 @@ def solve_planet(*, planet: PlanetPhysicalState, star: StellarSpectrum, inventor
         )
 
         condensed = sum(phase.liquid_mass_kg.values()) + sum(phase.solid_mass_kg.values())
-        cloud_column, cloud_tau_bulk = _bulk_cloud_tau(
+        _cloud_column, cloud_tau_bulk = _bulk_cloud_tau(
             condensed_mass_kg=condensed, planet=planet, settings=cfg
         )
         cloud_tau_spectral = (
@@ -372,15 +372,32 @@ def _column_key(column: object, settings: SolverSettings, star: StellarSpectrum)
     return hashlib.sha256(raw).hexdigest()
 
 
+def _scaled_stellar_spectrum(star: StellarSpectrum, scale: float) -> StellarSpectrum:
+    value = float(scale)
+    if value == 1.0:
+        return star
+    return StellarSpectrum(
+        wavelength_m=star.wavelength_m,
+        flux_w_m2_m=np.asarray(star.flux_w_m2_m, dtype=float) * value,
+        provenance=f"{star.provenance}; column stellar flux scale={value:.12g}",
+    )
+
+
 def solve_columns(batch: ColumnBatchInput, settings: SolverSettings | None = None) -> tuple[PlanetChemistryResult, ...]:
-    """Solve a column batch with exact-state de-duplication within the batch."""
+    """Solve a column batch with exact-state de-duplication and per-column forcing."""
     cfg = settings or SolverSettings()
     cache: dict[str, PlanetChemistryResult] = {}
     output: list[PlanetChemistryResult] = []
     for column in batch.columns:
-        key = _column_key(column, cfg, batch.star)
+        column_star = _scaled_stellar_spectrum(batch.star, column.stellar_flux_scale)
+        key = _column_key(column, cfg, column_star)
         if key not in cache:
-            cache[key] = solve_planet(planet=column.planet, star=batch.star, inventory=column.inventory,
-                                      surface=column.surface, settings=cfg)
+            cache[key] = solve_planet(
+                planet=column.planet,
+                star=column_star,
+                inventory=column.inventory,
+                surface=column.surface,
+                settings=cfg,
+            )
         output.append(cache[key])
     return tuple(output)
