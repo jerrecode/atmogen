@@ -61,7 +61,7 @@ def test_resolved_cloud_without_index_records_gray_fallback():
         vertical_layers=10,
         chemistry_mode="fixed_species",
         cloud_mode="lognormal_sedimentation",
-        cloud_particle_refractive_index_real=None,
+        cloud_refractive_index_real=None,
         cloud_microphysics_timestep_s=60.0,
         cloud_quadrature_order=4,
     ))
