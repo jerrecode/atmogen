@@ -300,6 +300,12 @@ class ColumnInput:
     planet: PlanetPhysicalState
     inventory: ElementInventory
     surface: SurfaceReservoirs = field(default_factory=SurfaceReservoirs)
+    stellar_flux_scale: float = 1.0
+
+    def __post_init__(self) -> None:
+        scale = float(self.stellar_flux_scale)
+        if not np.isfinite(scale) or scale < 0:
+            raise ValueError("stellar_flux_scale must be finite and non-negative")
 
 
 @dataclass(frozen=True, slots=True)
