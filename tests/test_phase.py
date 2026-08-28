@@ -1,6 +1,9 @@
 from atmogen import PlanetPhysicalState, SurfaceReservoirs
-from atmogen.phase import (atmospheric_composition_with_surface_vapor,
-                           partition_surface_reservoirs, saturation_pressure_pa)
+from atmogen.phase import (
+    atmospheric_composition_with_surface_vapor,
+    partition_surface_reservoirs,
+    saturation_pressure_pa,
+)
 
 
 def test_iapws_water_saturation_near_one_atmosphere_at_boiling():
@@ -9,10 +12,50 @@ def test_iapws_water_saturation_near_one_atmosphere_at_boiling():
     assert abs(pressure - 101325.0) / 101325.0 < 0.003
 
 
+def test_murphy_koop_water_vapor_pressure_over_ice_at_250_k():
+    pressure, note = saturation_pressure_pa("H2O", 250.0)
+    assert pressure is not None
+    assert abs(pressure - 76.0238900366) / 76.0238900366 < 2e-10
+    assert note and "Murphy-Koop" in note and "ice" in note
+
+
+def test_water_saturation_models_are_continuous_at_triple_point():
+    ice_pressure, ice_note = saturation_pressure_pa("water", 273.159)
+    liquid_pressure, liquid_note = saturation_pressure_pa("H2O", 273.16)
+    assert ice_note and "Murphy-Koop" in ice_note
+    assert liquid_note is None
+    assert ice_pressure is not None and liquid_pressure is not None
+    assert abs(ice_pressure - liquid_pressure) / liquid_pressure < 2e-4
+
+
+def test_water_vapor_pressure_does_not_silently_extrapolate_outside_validity():
+    pressure, note = saturation_pressure_pa("H2O", 100.0)
+    assert pressure is None
+    assert note and "outside 110-647.096 K" in note
+
+
+def test_subfreezing_water_reservoir_partitions_to_ice_and_finite_vapor():
+    result = partition_surface_reservoirs(
+        planet=PlanetPhysicalState(6.371e6, 9.81, 1.0e5),
+        temperature_k=250.0,
+        atmospheric_mole_fractions={"N2": 1.0},
+        surface=SurfaceReservoirs({"H2O": 1.0e18}),
+    )
+    assert result.mass_closure_relative < 1e-13
+    assert result.solid_mass_kg["H2O"] > 0
+    assert result.liquid_mass_kg["H2O"] == 0
+    assert result.atmospheric_mass_kg["H2O"] > 0
+    assert result.surface_vapor_mole_fractions["H2O"] > 0
+    assert any("Murphy-Koop" in note for note in result.fallbacks)
+
+
 def test_partition_conserves_surface_reservoir_mass():
-    result = partition_surface_reservoirs(planet=PlanetPhysicalState(6.371e6, 9.81, 1e5), temperature_k=288.15,
-                                          atmospheric_mole_fractions={"N2": 0.99, "H2O": 0.01},
-                                          surface=SurfaceReservoirs({"H2O": 1e18}))
+    result = partition_surface_reservoirs(
+        planet=PlanetPhysicalState(6.371e6, 9.81, 1e5),
+        temperature_k=288.15,
+        atmospheric_mole_fractions={"N2": 0.99, "H2O": 0.01},
+        surface=SurfaceReservoirs({"H2O": 1e18}),
+    )
     assert result.mass_closure_relative < 1e-14
     assert result.liquid_mass_kg["H2O"] > 0
     assert result.liquid_volume_m3["H2O"] > 0
@@ -21,7 +64,11 @@ def test_partition_conserves_surface_reservoir_mass():
 
 
 def test_worldgen_regression_condensables_have_explicit_models():
-    for species, temperature in (("CH4", 94.0), ("C2H6", 94.0), ("SO2", 250.0)):
+    for species, temperature in (
+        ("CH4", 94.0),
+        ("C2H6", 94.0),
+        ("SO2", 250.0),
+    ):
         pressure, note = saturation_pressure_pa(species, temperature)
         assert pressure is not None and pressure >= 0
         assert note and "estimated" in note
