@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atmogen"
+version = "0.1.0"
+description = "Deterministic vertical atmosphere, reservoir, chemistry, and spectral-radiation solver for procedural planets"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["numpy>=2.0", "scipy>=1.13"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "build>=1.2"]
+
+[project.scripts]
+atmogen = "atmogen.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[project.urls]
+Repository = "https://github.com/jerrecode/atmogen"
+Issues = "https://github.com/jerrecode/atmogen/issues"
