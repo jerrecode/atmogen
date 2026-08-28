@@ -43,3 +43,19 @@ def test_dense_co2_column_has_stronger_fast_greenhouse_than_thin_co2():
                          inventory=inv, settings=settings)
     assert dense.energy_budget.longwave_optical_depth > thin.energy_budget.longwave_optical_depth
     assert dense.atmosphere.temperature_k[0] > thin.atmosphere.temperature_k[0]
+
+
+def test_regression_planet_temperatures_are_broadly_plausible_not_fake_precision():
+    settings = SolverSettings(chemistry_mode="fixed_species")
+    cases = {
+        "mars": (PlanetPhysicalState(3.39e6, 3.71, 636.0, 215.0, 0.25), 590.0, {"CO2": .953, "N2": .027, "Ar": .02}, {}, (180, 320)),
+        "venus": (PlanetPhysicalState(6.052e6, 8.87, 9.2e6, 735.0, 0.75), 2610.0, {"CO2": .965, "N2": .035}, {"SO2": 1.3321e21}, (500, 1200)),
+        "titan": (PlanetPhysicalState(2.575e6, 1.352, 1.47e5, 94.0, 0.27), 15.0, {"N2": .95, "CH4": .05}, {"CH4": 1.1e16, "C2H6": 5.3e15}, (65, 170)),
+    }
+    for name, (planet, flux, species, surface, bounds) in cases.items():
+        result = solve_planet(planet=planet, star=blackbody_stellar_spectrum(5772, flux),
+                              inventory=ElementInventory(species_moles_to_elements(species), species, "regression initial state"),
+                              surface=SurfaceReservoirs(surface), settings=settings)
+        temperature = float(result.atmosphere.temperature_k[0])
+        assert bounds[0] <= temperature <= bounds[1], (name, temperature)
+        assert result.convergence.converged

@@ -31,7 +31,8 @@ def saturation_pressure_pa(species: str, temperature_k: float) -> tuple[float | 
     }
     if species in anchors:
         tref, pref, latent, mm = anchors[species]
-        value = pref * np.exp(-latent * mm / 8.31446261815324 * (1.0 / t - 1.0 / tref))
+        exponent = np.clip(-latent * mm / 8.31446261815324 * (1.0 / t - 1.0 / tref), -745.0, 700.0)
+        value = pref * np.exp(exponent)
         return float(max(value, 0.0)), f"{species}: estimated Clausius-Clapeyron screening vapor pressure"
     return None, f"{species}: no defensible bundled vapor-pressure model; condensation disabled"
 

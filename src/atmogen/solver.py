@@ -99,7 +99,10 @@ def solve_planet(*, planet: PlanetPhysicalState, star: StellarSpectrum, inventor
         teff = ((absorbed + planet.internal_heat_flux_w_m2) / SIGMA_SB) ** 0.25
         tau_lw = longwave_optical_depth(surface_pressure_pa=planet.surface_pressure_pa,
                                         gravity_m_s2=planet.gravity_m_s2,
-                                        mole_fractions=composition, database=database)
+                                        mole_fractions=composition,
+                                        additional_species_column_kg_m2={
+                                            key: mass / area for key, mass in phase.atmospheric_mass_kg.items()
+                                        }, database=database)
         target = teff * (1.0 + 0.75 * tau_lw) ** 0.25
         target = float(np.clip(target, 20.0, 4000.0))
         updated = (1.0 - cfg.relaxation) * temperature + cfg.relaxation * target

@@ -36,7 +36,7 @@ class Species:
     liquid_density_kg_m3: float | None
     latent_heat_j_kg: float | None
     rayleigh_cross_section_550_m2: float | None
-    longwave_mass_absorption_m2_kg_fast: float
+    longwave_column_coefficient_fast: float
     provenance_class: ProvenanceClass
     source: str
     validity: str
@@ -97,7 +97,8 @@ def _sp(key: str, formula: Mapping[str, int], mm: float, phase: str, hf: float, 
 
 # Thermochemistry is compact validation data, not a replacement for temperature-
 # segmented NASA/Shomate tables. Optical longwave coefficients are explicitly
-# ESTIMATED screening coefficients and never exposed as measured constants.
+# ESTIMATED square-root-column screening coefficients and never exposed as
+# measured mass-absorption constants.
 BUILTIN_DATABASE = ChemicalDatabase({
     "H2": _sp("H2", {"H": 2}, 2.01588e-3, "gas", 0.0, 130.68, 28.84, 13.99, 33.15, 70.8, 4.46e5, 8.5e-32, 1e-5),
     "He": _sp("He", {"He": 1}, 4.002602e-3, "gas", 0.0, 126.15, 20.79, None, 5.20, 125.0, 2.1e4, 1.0e-32, 0.0),

@@ -92,10 +92,19 @@ def spectrum_to_srgb(wavelength_m: np.ndarray, radiance: np.ndarray) -> tuple[fl
 
 def longwave_optical_depth(*, surface_pressure_pa: float, gravity_m_s2: float,
                            mole_fractions: Mapping[str, float],
+                           additional_species_column_kg_m2: Mapping[str, float] | None = None,
                            database: ChemicalDatabase = BUILTIN_DATABASE) -> float:
     mean_mm = sum(database.get(k).molar_mass_kg_mol * float(x) for k, x in mole_fractions.items())
     column_mass = surface_pressure_pa / gravity_m_s2
-    mass_weighted_kappa = sum(float(x) * database.get(k).molar_mass_kg_mol / mean_mm
-                              * database.get(k).longwave_mass_absorption_m2_kg_fast
-                              for k, x in mole_fractions.items())
-    return float(max(column_mass * mass_weighted_kappa, 0.0))
+    # FAST mode uses a bounded square-root column proxy. It represents saturation
+    # and pressure-broadened band overlap better than linear gray absorption while
+    # remaining explicitly empirical. Coefficients therefore have implied units
+    # (kg m^-2)^-1/2 and are never presented as laboratory cross sections.
+    tau = 0.0
+    for key, x in mole_fractions.items():
+        mass_fraction = float(x) * database.get(key).molar_mass_kg_mol / mean_mm
+        species_column = max(column_mass * mass_fraction, 0.0)
+        tau += database.get(key).longwave_column_coefficient_fast * np.sqrt(species_column)
+    for key, species_column in (additional_species_column_kg_m2 or {}).items():
+        tau += database.get(key).longwave_column_coefficient_fast * np.sqrt(max(float(species_column), 0.0))
+    return float(max(tau, 0.0))

@@ -42,7 +42,8 @@ Water saturation follows the IAPWS release form. Rayleigh follows the expected
 species-dependent wavelength-to-the-minus-four limit. CIE conversion uses the
 Wyman et al. analytic fit to the CIE 1931 2-degree functions.
 
-The current longwave coefficients, non-water vapor-pressure relations, and bulk
+The current square-root-column longwave coefficients (an empirical band-saturation
+proxy with implied units of `(kg m⁻²)^-1/2`), non-water vapor-pressure relations, and bulk
 cloud suspension are explicitly reduced-order estimates. Version 0.1 does **not**
 claim non-ideal activity models, liquid-liquid separation, kinetics, photolysis,
 vertical diffusion, Mie scattering, correlated-k, line-by-line transfer, or a full
