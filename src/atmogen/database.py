@@ -52,13 +52,7 @@ class Species:
 
 @dataclass(frozen=True, slots=True)
 class NRTLInteraction:
-    """Directed binary interaction for an isothermal NRTL activity model.
-
-    ``delta_g_ij_j_mol`` is converted to ``tau_ij = delta_g_ij / (R T)``.
-    Parameters are deliberately external scientific data: the builtin validation
-    database does not invent coefficients for pairs whose values have not been
-    sourced and checked.
-    """
+    """Directed binary interaction for an isothermal NRTL activity model."""
 
     component_i: str
     component_j: str
@@ -77,11 +71,72 @@ class NRTLInteraction:
             raise ValueError("NRTL alpha must be finite and non-negative")
 
 
+@dataclass(frozen=True, slots=True)
+class Reaction:
+    """Stoichiometric kinetic reaction with explicit rate-law/provenance semantics.
+
+    Concentrations are interpreted as mol m^-3 and volumetric reaction rates as
+    mol m^-3 s^-1. For ``rate_law='arrhenius'`` the pre-exponential factor therefore
+    has units ``(m^3 mol^-1)^(order-1) s^-1`` where ``order`` is the sum of reactant
+    stoichiometric exponents. ``rate_coefficient_units`` records the exact external
+    unit text used by the scientific source and is never inferred as provenance.
+
+    ``rate_law='photolysis'`` represents one-parent first-order photodestruction.
+    Its local J value [s^-1] is supplied by the photochemistry solver rather than
+    embedded in this record.
+    """
+
+    key: str
+    reactants: Mapping[str, float]
+    products: Mapping[str, float]
+    rate_law: str = "arrhenius"  # arrhenius | photolysis
+    pre_exponential_factor_si: float | None = None
+    temperature_exponent: float = 0.0
+    activation_energy_j_mol: float = 0.0
+    reference_temperature_k: float = 298.15
+    rate_coefficient_units: str = ""
+    provenance_class: ProvenanceClass = ProvenanceClass.UNKNOWN
+    source: str = ""
+    validity: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.key:
+            raise ValueError("reaction key cannot be empty")
+        if self.rate_law not in {"arrhenius", "photolysis"}:
+            raise ValueError("reaction rate_law must be arrhenius or photolysis")
+        if not self.reactants or not self.products:
+            raise ValueError("reaction requires reactants and products")
+        for label, mapping in (("reactant", self.reactants), ("product", self.products)):
+            for species, coefficient in mapping.items():
+                value = float(coefficient)
+                if not species or not np.isfinite(value) or value <= 0:
+                    raise ValueError(f"invalid {label} stoichiometry {species!r}: {coefficient!r}")
+        if not np.isfinite(self.temperature_exponent):
+            raise ValueError("temperature_exponent must be finite")
+        if not np.isfinite(self.activation_energy_j_mol):
+            raise ValueError("activation_energy_j_mol must be finite")
+        if not np.isfinite(self.reference_temperature_k) or self.reference_temperature_k <= 0:
+            raise ValueError("reference_temperature_k must be finite and positive")
+        if self.rate_law == "arrhenius":
+            if self.pre_exponential_factor_si is None or not np.isfinite(self.pre_exponential_factor_si) or self.pre_exponential_factor_si < 0:
+                raise ValueError("arrhenius reaction requires a finite non-negative pre_exponential_factor_si")
+        else:
+            if len(self.reactants) != 1 or abs(float(next(iter(self.reactants.values()))) - 1.0) > 1e-12:
+                raise ValueError("photolysis reaction must contain exactly one parent reactant with coefficient 1")
+            if self.pre_exponential_factor_si not in {None, 0.0}:
+                raise ValueError("photolysis J is supplied externally; pre_exponential_factor_si must be None or zero")
+
+    @property
+    def order(self) -> float:
+        return float(sum(float(value) for value in self.reactants.values()))
+
+
 class ChemicalDatabase:
     """Versioned, immutable scientific-data view used by solver backends."""
 
     def __init__(self, species: Mapping[str, Species],
-                 nrtl_interactions: Iterable[NRTLInteraction] = ()) -> None:
+                 nrtl_interactions: Iterable[NRTLInteraction] = (),
+                 reactions: Iterable[Reaction] = ()) -> None:
         self._species = dict(species)
         if len(self._species) != len(set(self._species)):
             raise ValueError("duplicate species keys")
@@ -98,6 +153,35 @@ class ChemicalDatabase:
             )
         self._nrtl_interactions = interactions
 
+        reaction_map: dict[str, Reaction] = {}
+        for item in reactions:
+            if item.key in reaction_map:
+                raise ValueError(f"duplicate reaction key {item.key!r}")
+            reactants = {canonical_species(key): float(value) for key, value in item.reactants.items()}
+            products = {canonical_species(key): float(value) for key, value in item.products.items()}
+            for key in set(reactants) | set(products):
+                if key not in self._species:
+                    raise ValueError(f"reaction {item.key!r} references unknown species {key!r}")
+            canonical = Reaction(
+                key=item.key,
+                reactants=reactants,
+                products=products,
+                rate_law=item.rate_law,
+                pre_exponential_factor_si=item.pre_exponential_factor_si,
+                temperature_exponent=item.temperature_exponent,
+                activation_energy_j_mol=item.activation_energy_j_mol,
+                reference_temperature_k=item.reference_temperature_k,
+                rate_coefficient_units=item.rate_coefficient_units,
+                provenance_class=item.provenance_class,
+                source=item.source,
+                validity=item.validity,
+            )
+            residual = reaction_element_residual(canonical, self._species)
+            if residual and max(abs(value) for value in residual.values()) > 1e-10:
+                raise ValueError(f"reaction {item.key!r} is not element-balanced: {residual}")
+            reaction_map[item.key] = canonical
+        self._reactions = reaction_map
+
     @property
     def species(self) -> Mapping[str, Species]:
         return self._species
@@ -105,6 +189,10 @@ class ChemicalDatabase:
     @property
     def nrtl_interactions(self) -> Mapping[tuple[str, str], NRTLInteraction]:
         return self._nrtl_interactions
+
+    @property
+    def reactions(self) -> Mapping[str, Reaction]:
+        return self._reactions
 
     def get(self, key: str) -> Species:
         canonical = canonical_species(key)
@@ -122,6 +210,7 @@ class ChemicalDatabase:
                 f"{key[0]}->{key[1]}": asdict(value)
                 for key, value in sorted(self._nrtl_interactions.items())
             },
+            "reactions": {key: asdict(value) for key, value in sorted(self._reactions.items())},
         }
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
         return hashlib.sha256(raw).hexdigest()
@@ -135,6 +224,19 @@ def canonical_species(key: str) -> str:
     return _ALIASES.get(stripped.lower(), stripped)
 
 
+def reaction_element_residual(reaction: Reaction, species: Mapping[str, Species]) -> dict[str, float]:
+    """Products minus reactants in stoichiometric element counts."""
+    residual: dict[str, float] = {}
+    for sign, side in ((-1.0, reaction.reactants), (1.0, reaction.products)):
+        for raw_key, coefficient in side.items():
+            key = canonical_species(raw_key)
+            if key not in species:
+                raise KeyError(f"reaction {reaction.key!r} references unknown species {key!r}")
+            for element, count in species[key].formula.items():
+                residual[element] = residual.get(element, 0.0) + sign * float(coefficient) * float(count)
+    return {key: float(value) for key, value in residual.items() if abs(value) > 1e-14}
+
+
 def _sp(key: str, formula: Mapping[str, int], mm: float, phase: str, hf: float, s: float, cp: float,
         freeze: float | None, critical: float | None, rho: float | None, latent: float | None,
         rayleigh: float | None, lw: float, provenance: ProvenanceClass = ProvenanceClass.FITTED,
@@ -146,8 +248,9 @@ def _sp(key: str, formula: Mapping[str, int], mm: float, phase: str, hf: float, 
 # Thermochemistry is compact validation data, not a replacement for temperature-
 # segmented NASA/Shomate tables. Optical longwave coefficients are explicitly
 # ESTIMATED square-root-column screening coefficients and never exposed as
-# measured mass-absorption constants. NRTL parameters are intentionally absent
-# until a source and validity range are explicitly recorded for a pair.
+# measured mass-absorption constants. NRTL parameters and kinetic reactions are
+# intentionally absent from the bundled validation database until sources and
+# validity ranges have been explicitly checked.
 BUILTIN_DATABASE = ChemicalDatabase({
     "H2": _sp("H2", {"H": 2}, 2.01588e-3, "gas", 0.0, 130.68, 28.84, 13.99, 33.15, 70.8, 4.46e5, 8.5e-32, 1e-5),
     "He": _sp("He", {"He": 1}, 4.002602e-3, "gas", 0.0, 126.15, 20.79, None, 5.20, 125.0, 2.1e4, 1.0e-32, 0.0),
