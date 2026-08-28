@@ -96,6 +96,8 @@ class SolverSettings:
     chemistry_mode: str = "equilibrium"  # equilibrium | fixed_species
     radiation_mode: str = "semi_gray_spectral_shortwave"
     cloud_mode: str = "equilibrium_bulk"
+    activity_model: str = "auto"  # auto | ideal | nrtl
+    liquid_phase_split: bool = True
     max_iterations: int = 40
     relative_temperature_tolerance: float = 2e-5
     composition_tolerance: float = 1e-9
@@ -116,6 +118,10 @@ class SolverSettings:
             raise ValueError("top_pressure_pa must be positive")
         if self.chemistry_mode not in {"equilibrium", "fixed_species"}:
             raise ValueError("chemistry_mode must be equilibrium or fixed_species")
+        if self.activity_model not in {"auto", "ideal", "nrtl"}:
+            raise ValueError("activity_model must be auto, ideal, or nrtl")
+        if not isinstance(self.liquid_phase_split, bool):
+            raise TypeError("liquid_phase_split must be bool")
         if self.max_iterations < 1:
             raise ValueError("max_iterations must be positive")
         if not 0 < self.relaxation <= 1:
@@ -135,6 +141,20 @@ class AtmosphericProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class LiquidPhaseState:
+    """One thermodynamic liquid phase, with global phase inventory."""
+
+    phase_fraction_mol: float
+    species_moles: Mapping[str, float]
+    mole_fractions: Mapping[str, float]
+    species_mass_kg: Mapping[str, float]
+    density_kg_m3: float | None
+    volume_m3: float | None
+    activity_coefficients: Mapping[str, float]
+    activity_model: str
+
+
+@dataclass(frozen=True, slots=True)
 class PhaseReservoirResult:
     atmospheric_mass_kg: Mapping[str, float]
     liquid_mass_kg: Mapping[str, float]
@@ -143,6 +163,9 @@ class PhaseReservoirResult:
     latent_heat_flux_w_m2: float
     mass_closure_relative: float
     fallbacks: tuple[str, ...]
+    surface_vapor_mole_fractions: Mapping[str, float] = field(default_factory=dict)
+    liquid_phases: tuple[LiquidPhaseState, ...] = ()
+    activity_model: str = "ideal"
 
 
 @dataclass(frozen=True, slots=True)

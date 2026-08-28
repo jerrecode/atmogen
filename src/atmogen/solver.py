@@ -14,7 +14,8 @@ from .models import (CloudResult, ColumnBatchInput, ConvergenceReport, ElementIn
                      EnergyBudget, PhaseReservoirResult, PlanetChemistryResult,
                      PlanetPhysicalState, SolverSettings, SpectralResult, StellarSpectrum,
                      SurfaceReservoirs)
-from .phase import partition_surface_reservoirs
+from .phase import (atmospheric_composition_with_surface_vapor,
+                    partition_surface_reservoirs)
 from .radiation import (SIGMA_SB, beer_lambert_transmission, longwave_optical_depth,
                         planck_radiance_w_m2_sr_m, rayleigh_optical_depth, spectrum_to_srgb)
 from .version import API_SCHEMA_VERSION, DATA_SCHEMA_VERSION, __version__
@@ -64,15 +65,26 @@ def solve_planet(*, planet: PlanetPhysicalState, star: StellarSpectrum, inventor
     composition_delta = float("inf")
     phase: PhaseReservoirResult | None = None
     cloud = CloudResult({}, 10e-6, 0.0, "equilibrium_bulk")
+    chemistry_composition: dict[str, float] = {}
 
     for iteration in range(1, cfg.max_iterations + 1):
-        composition, chemistry_meta = _composition(inventory, cfg, temperature, planet.surface_pressure_pa, database)
+        chemistry_composition, chemistry_meta = _composition(
+            inventory, cfg, temperature, planet.surface_pressure_pa, database
+        )
+        phase = partition_surface_reservoirs(
+            planet=planet, temperature_k=temperature,
+            atmospheric_mole_fractions=chemistry_composition,
+            surface=reservoirs, database=database,
+            activity_model=cfg.activity_model,
+            liquid_phase_split=cfg.liquid_phase_split,
+        )
+        composition, _surface_source = atmospheric_composition_with_surface_vapor(
+            planet=planet, atmospheric_mole_fractions=chemistry_composition,
+            surface_vapor_mass_kg=phase.atmospheric_mass_kg, database=database,
+        )
         composition_delta = (max(abs(composition.get(k, 0.0) - previous_composition.get(k, 0.0))
                                  for k in set(composition) | set(previous_composition))
                              if previous_composition is not None else 1.0)
-        phase = partition_surface_reservoirs(planet=planet, temperature_k=temperature,
-                                             atmospheric_mole_fractions=composition,
-                                             surface=reservoirs, database=database)
         condensed = sum(phase.liquid_mass_kg.values()) + sum(phase.solid_mass_kg.values())
         area = 4 * np.pi * planet.radius_m**2
         cloud_column = min(condensed / area, 0.2) * 0.01
@@ -97,15 +109,15 @@ def solve_planet(*, planet: PlanetPhysicalState, star: StellarSpectrum, inventor
         incoming_mean = star.bolometric_flux_w_m2 / 4.0
         absorbed = incoming_mean * (1.0 - bond)
         teff = ((absorbed + planet.internal_heat_flux_w_m2) / SIGMA_SB) ** 0.25
+        # FAST longwave still applies the documented bulk cold-trap depletion to
+        # surface-supplied vapor. The physical atmospheric composition above is
+        # already used for hydrostatics and shortwave scattering; using it again
+        # here without a resolved vertical humidity profile would double-count the
+        # near-surface saturated abundance throughout the entire column.
         tau_lw = longwave_optical_depth(surface_pressure_pa=planet.surface_pressure_pa,
                                         gravity_m_s2=planet.gravity_m_s2,
-                                        mole_fractions=composition,
+                                        mole_fractions=chemistry_composition,
                                         additional_species_column_kg_m2={
-                                            # Surface saturation is not vertically uniform: a
-                                            # convecting column cools upward and cold-traps vapor.
-                                            # FAST mode uses a documented bulk depletion factor;
-                                            # later radiative-convective backends will integrate
-                                            # the resolved saturation profile instead.
                                             key: 0.35 * mass / area for key, mass in phase.atmospheric_mass_kg.items()
                                         }, database=database)
         target = teff * (1.0 + 0.75 * tau_lw) ** 0.25
@@ -147,15 +159,19 @@ def solve_planet(*, planet: PlanetPhysicalState, star: StellarSpectrum, inventor
     diagnostics = {"finite": bool(np.isfinite(profile.pressure_pa).all() and np.isfinite(profile.density_kg_m3).all()),
                    "non_negative": not total_negative, "hydrostatic_relative_residual": profile.hydrostatic_relative_residual,
                    "reservoir_mass_closure_relative": phase.mass_closure_relative if phase else 0.0,
-                   "chemistry": chemistry_meta, "fallbacks": phase.fallbacks if phase else ()}
+                   "chemistry": chemistry_meta, "fallbacks": phase.fallbacks if phase else (),
+                   "liquid_phase_count": len(phase.liquid_phases) if phase else 0,
+                   "activity_model": phase.activity_model if phase else "ideal"}
     provenance = {"atmogen_version": __version__, "api_schema_version": API_SCHEMA_VERSION,
                   "data_schema_version": DATA_SCHEMA_VERSION, "database_sha256": database.revision_hash,
                   "fidelity": cfg.fidelity.value, "chemistry_mode": cfg.chemistry_mode,
                   "radiation_mode": cfg.radiation_mode, "cloud_mode": cfg.cloud_mode,
+                  "activity_model_requested": cfg.activity_model,
+                  "liquid_phase_split": cfg.liquid_phase_split,
                   "stellar_spectrum": star.provenance,
                   "condensable_vertical_depletion_factor_fast": 0.35,
                   "surface_vapor_band_optical_depth_cap_fast": 1.5,
-                  "limitations": "semi-gray longwave, bulk cold-trap depletion and equilibrium cloud are reduced-order models"}
+                  "limitations": "semi-gray longwave, fixed-pressure reservoir coupling, ideal-volume liquid density, bulk cold-trap depletion and equilibrium cloud remain reduced-order models"}
     return PlanetChemistryResult(profile, phase, cloud, spectra, budget, convergence, diagnostics, provenance)
 
 
