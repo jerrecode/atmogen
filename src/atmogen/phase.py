@@ -12,19 +12,59 @@ from .models import (LiquidPhaseState, PhaseReservoirResult, PlanetPhysicalState
 
 
 def saturation_pressure_pa(species: str, temperature_k: float) -> tuple[float | None, str | None]:
-    """Return vapor pressure and provenance/fallback note.
+    """Return equilibrium vapor pressure and provenance/fallback note.
 
-    Water uses the IAPWS saturation release form between the triple and critical
-    points. Other bundled condensables use bounded Clausius-Clapeyron screening
-    fits and are labelled as estimates.
+    Water uses the Murphy & Koop (2005) vapor-pressure relation over ice from
+    110 K up to the triple point and the IAPWS saturation release form from the
+    triple point through the critical point. Other bundled condensables retain
+    bounded Clausius-Clapeyron screening fits and are explicitly labelled as
+    estimates rather than measured/fitted high-fidelity vapor-pressure models.
     """
+    key = canonical_species(species)
     t = float(temperature_k)
-    if species == "H2O" and 273.16 <= t <= 647.096:
+    if not np.isfinite(t) or t <= 0:
+        raise ValueError("temperature_k must be finite and positive")
+
+    if key == "H2O" and 110.0 <= t < 273.16:
+        # Murphy & Koop (2005), QJRMS 131, 1539-1565, eq. 7:
+        # ln(p_ice / Pa) = 9.550426 - 5723.265/T + 3.53068 ln(T) - 0.00728332 T.
+        ln_pressure = (
+            9.550426
+            - 5723.265 / t
+            + 3.53068 * np.log(t)
+            - 0.00728332 * t
+        )
+        return float(np.exp(ln_pressure)), (
+            "H2O: Murphy-Koop (2005) equilibrium vapor pressure over ice"
+        )
+
+    if key == "H2O" and 273.16 <= t <= 647.096:
         tc, pc = 647.096, 22.064e6
         theta = 1.0 - t / tc
-        a = (-7.85951783, 1.84408259, -11.7866497, 22.6807411, -15.9618719, 1.80122502)
+        a = (
+            -7.85951783,
+            1.84408259,
+            -11.7866497,
+            22.6807411,
+            -15.9618719,
+            1.80122502,
+        )
         powers = (1.0, 1.5, 3.0, 3.5, 4.0, 7.5)
-        return float(pc * np.exp(tc / t * sum(c * theta**p for c, p in zip(a, powers, strict=True)))), None
+        return float(
+            pc
+            * np.exp(
+                tc
+                / t
+                * sum(c * theta**p for c, p in zip(a, powers, strict=True))
+            )
+        ), None
+
+    if key == "H2O":
+        return None, (
+            "H2O: no bundled equilibrium vapor-pressure relation outside "
+            "110-647.096 K; condensation screening disabled"
+        )
+
     anchors = {
         "CO2": (216.58, 5.18e5, 5.74e5, 44.0095e-3),
         "CH4": (90.69, 1.17e4, 5.10e5, 16.0425e-3),
@@ -32,12 +72,23 @@ def saturation_pressure_pa(species: str, temperature_k: float) -> tuple[float | 
         "C2H6": (90.35, 1.1, 4.89e5, 30.0690e-3),
         "SO2": (197.67, 1.67e4, 3.89e5, 64.066e-3),
     }
-    if species in anchors:
-        tref, pref, latent, mm = anchors[species]
-        exponent = np.clip(-latent * mm / 8.31446261815324 * (1.0 / t - 1.0 / tref), -745.0, 700.0)
+    if key in anchors:
+        tref, pref, latent, mm = anchors[key]
+        exponent = np.clip(
+            -latent
+            * mm
+            / 8.31446261815324
+            * (1.0 / t - 1.0 / tref),
+            -745.0,
+            700.0,
+        )
         value = pref * np.exp(exponent)
-        return float(max(value, 0.0)), f"{species}: estimated Clausius-Clapeyron screening vapor pressure"
-    return None, f"{species}: no defensible bundled vapor-pressure model; condensation disabled"
+        return float(max(value, 0.0)), (
+            f"{key}: estimated Clausius-Clapeyron screening vapor pressure"
+        )
+    return None, (
+        f"{key}: no defensible bundled vapor-pressure model; condensation disabled"
+    )
 
 
 def _normalised_background(mole_fractions: Mapping[str, float],
@@ -213,9 +264,8 @@ def partition_surface_reservoirs(
                     0.0,
                 )
         for key in solid_keys:
-            # The bundled non-water relation remains only a screening sublimation
-            # approximation below the freezing point; its fallback note above
-            # makes that limitation explicit.
+            # Water now uses the sourced Murphy-Koop ice relation here. Other
+            # bundled species retain explicitly labelled screening sublimation fits.
             target_y[key] = max(float(psat[key]) / planet.surface_pressure_pa, 0.0)
 
         target_total = sum(target_y.values())
