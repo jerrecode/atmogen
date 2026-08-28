@@ -1,5 +1,5 @@
 """Package and schema identities used by caches and downstream provenance."""
 
-__version__ = "0.9.0"
-API_SCHEMA_VERSION = 8
-DATA_SCHEMA_VERSION = 3
+__version__ = "0.10.0"
+API_SCHEMA_VERSION = 9
+DATA_SCHEMA_VERSION = 4
