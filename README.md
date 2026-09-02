@@ -130,6 +130,11 @@ an annual climatological precipitation rate.
 `solve_columns` supports deterministic exact-state de-duplication and an explicit
 per-column stellar-flux multiplier, allowing a horizontal host model to preserve
 geographic/seasonal forcing differences while reusing identical vertical states.
+`column_state_fingerprint` publishes the versioned cache identity used by that
+de-duplication, including the solver settings and chemical-database revision.
+`solve_columns_with_diagnostics` retains the state-aligned result order while also
+reporting unique-state counts, de-duplication, convergence, fallbacks, fingerprints
+and per-column provenance for host-side caches and request coalescing.
 
 ## Fidelity semantics
 

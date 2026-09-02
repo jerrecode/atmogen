@@ -15,7 +15,8 @@ from .kinetics import (KineticsResult, arrhenius_rate_constant,
 from .liquids import (ActivityModel, IdealActivityModel, LiquidPhaseSplitResult,
                       NRTLActivityModel, liquid_mixture_density_kg_m3,
                       liquid_phase_stability, select_activity_model)
-from .models import (ColumnBatchInput, ColumnInput, ElementInventory, Fidelity,
+from .models import (ColumnBatchDiagnostics, ColumnBatchInput, ColumnBatchResult,
+                     ColumnInput, ElementInventory, Fidelity,
                      LiquidPhaseState, PlanetChemistryResult, PlanetPhysicalState,
                      SolverSettings, StellarSpectrum, SurfaceReservoirs,
                      VerticalProcessResult)
@@ -27,7 +28,8 @@ from .photochemistry import (PhotolysisData, attenuate_actinic_photon_flux,
                              column_photolysis_rates_s1, photolysis_rate_s1,
                              spectral_irradiance_to_photon_flux)
 from .radiation import blackbody_stellar_spectrum
-from .solver import solve_columns, solve_planet
+from .solver import (column_state_fingerprint, solve_columns,
+                     solve_columns_with_diagnostics, solve_planet)
 from .transport import (QuenchDiagnostic, VerticalTransportResult,
                         eddy_diffusion_flux_mol_m2_s, integrate_eddy_diffusion,
                         mixing_timescale_s, quench_diagnostic)
@@ -35,7 +37,8 @@ from .vertical_processes import layer_thickness_from_centres, solve_vertical_pro
 from .version import API_SCHEMA_VERSION, DATA_SCHEMA_VERSION, __version__
 
 __all__ = ["API_SCHEMA_VERSION", "ActivityModel", "BUILTIN_DATABASE", "ChemicalDatabase",
-           "ColumnBatchInput", "ColumnInput", "DATA_SCHEMA_VERSION", "ElementInventory", "Fidelity",
+           "ColumnBatchDiagnostics", "ColumnBatchInput", "ColumnBatchResult", "ColumnInput",
+           "DATA_SCHEMA_VERSION", "ElementInventory", "Fidelity",
            "FresnelReflectance", "IdealActivityModel", "KineticsResult", "LiquidPhaseSplitResult",
            "LiquidPhaseState", "MieEfficiencies", "NRTLActivityModel", "NRTLInteraction",
            "ParticleOpticalCoefficients", "ParticlePopulation", "PhotolysisData",
@@ -44,7 +47,7 @@ __all__ = ["API_SCHEMA_VERSION", "ActivityModel", "BUILTIN_DATABASE", "ChemicalD
            "SettlingResult", "SolverSettings", "Species", "StellarSpectrum", "SurfaceReservoirs",
            "VerticalProcessResult", "VerticalTransportResult", "__version__",
            "absorption_coefficient_m_inv", "arrhenius_rate_constant",
-           "attenuate_actinic_photon_flux", "blackbody_stellar_spectrum",
+           "attenuate_actinic_photon_flux", "blackbody_stellar_spectrum", "column_state_fingerprint",
            "column_photolysis_rates_s1", "cunningham_slip_correction",
            "eddy_diffusion_flux_mol_m2_s", "expected_rate_coefficient_units",
            "fresnel_reflectance", "integrate_eddy_diffusion", "integrate_kinetics",
@@ -53,6 +56,7 @@ __all__ = ["API_SCHEMA_VERSION", "ActivityModel", "BUILTIN_DATABASE", "ChemicalD
            "mixing_timescale_s", "particle_optical_coefficients", "photolysis_rate_s1",
            "precipitation_step", "quench_diagnostic", "rayleigh_sphere_efficiencies",
            "reaction_element_residual", "reaction_rates", "sedimentation_mass_flux",
-           "select_activity_model", "solve_columns", "solve_planet", "solve_vertical_processes",
+           "select_activity_model", "solve_columns", "solve_columns_with_diagnostics",
+           "solve_planet", "solve_vertical_processes",
            "species_moles_to_elements", "spectral_irradiance_to_photon_flux",
            "sphere_drag_coefficient", "terminal_settling_velocity"]

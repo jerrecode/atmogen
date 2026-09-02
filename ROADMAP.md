@@ -20,7 +20,7 @@ The worldgen planetary roadmap tracks nine major workstreams. Their ownership is
 
 ## Phase A — Stable multiscale column contract
 
-**Status:** partially implemented. `solve_columns` already supports deterministic exact-state de-duplication and per-column stellar-flux scaling.
+**Status:** implemented. `solve_columns` supports deterministic exact-state de-duplication and per-column stellar-flux scaling; API 10 additionally publishes stable fingerprints and ordered batch diagnostics.
 
 Deliverables:
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import fields, is_dataclass
+from enum import Enum
 import hashlib
 import json
 from typing import Mapping
@@ -18,6 +19,9 @@ from .hydrostatic import (
 from .models import (
     CloudResult,
     ColumnBatchInput,
+    ColumnBatchDiagnostics,
+    ColumnBatchResult,
+    ColumnInput,
     ConvergenceReport,
     ElementInventory,
     EnergyBudget,
@@ -901,28 +905,65 @@ def solve_planet(
     )
 
 
-def _column_key(
-    column: object, settings: SolverSettings, star: StellarSpectrum
-) -> str:
-    def convert(value: object) -> object:
-        if hasattr(value, "__dataclass_fields__"):
-            return {k: convert(v) for k, v in asdict(value).items()}
-        if isinstance(value, Mapping):
-            return {str(k): convert(v) for k, v in sorted(value.items())}
-        if isinstance(value, np.ndarray):
-            return hashlib.sha256(value.tobytes()).hexdigest()
-        return value
+def _fingerprint_value(value: object) -> object:
+    """Convert typed solver state into a deterministic JSON-compatible payload."""
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            item.name: _fingerprint_value(getattr(value, item.name))
+            for item in fields(value)
+        }
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Mapping):
+        return {
+            str(key): _fingerprint_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, np.ndarray):
+        array = np.ascontiguousarray(value)
+        return {
+            "dtype": array.dtype.str,
+            "shape": list(array.shape),
+            "sha256": hashlib.sha256(array.tobytes(order="C")).hexdigest(),
+        }
+    if isinstance(value, np.generic):
+        return _fingerprint_value(value.item())
+    if isinstance(value, (tuple, list)):
+        return [_fingerprint_value(item) for item in value]
+    return value
 
+
+def column_state_fingerprint(
+    column: ColumnInput,
+    star: StellarSpectrum,
+    settings: SolverSettings | None = None,
+    *,
+    database: ChemicalDatabase = BUILTIN_DATABASE,
+) -> str:
+    """Return the stable identity of a complete host-requested column state.
+
+    The identity includes numerical inputs, provenance-affecting strings, solver/API
+    versions and the chemical database revision. It is suitable for request
+    coalescing and persistent cache keys; it is not a scientific checksum of an
+    already computed result.
+    """
+    cfg = settings or SolverSettings()
     raw = json.dumps(
         {
-            "column": convert(column),
-            "settings": convert(settings),
-            "star_wave": hashlib.sha256(star.wavelength_m.tobytes()).hexdigest(),
-            "star_flux": hashlib.sha256(star.flux_w_m2_m.tobytes()).hexdigest(),
+            "fingerprint_schema": "atmogen-column-state-v1",
+            "atmogen_version": __version__,
+            "api_schema_version": API_SCHEMA_VERSION,
+            "data_schema_version": DATA_SCHEMA_VERSION,
+            "database_sha256": database.revision_hash,
+            "column": _fingerprint_value(column),
+            "settings": _fingerprint_value(cfg),
+            "star": _fingerprint_value(star),
         },
         sort_keys=True,
-        default=str,
-    ).encode()
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -940,17 +981,37 @@ def _scaled_stellar_spectrum(
 
 
 def solve_columns(
-    batch: ColumnBatchInput, settings: SolverSettings | None = None
+    batch: ColumnBatchInput,
+    settings: SolverSettings | None = None,
+    *,
+    database: ChemicalDatabase = BUILTIN_DATABASE,
 ) -> tuple[PlanetChemistryResult, ...]:
     """Solve a column batch with exact-state de-duplication and per-column forcing."""
+    return solve_columns_with_diagnostics(
+        batch, settings, database=database
+    ).results
+
+
+def solve_columns_with_diagnostics(
+    batch: ColumnBatchInput,
+    settings: SolverSettings | None = None,
+    *,
+    database: ChemicalDatabase = BUILTIN_DATABASE,
+) -> ColumnBatchResult:
+    """Solve an ordered batch and expose stable cache/provenance diagnostics."""
     cfg = settings or SolverSettings()
     cache: dict[str, PlanetChemistryResult] = {}
     output: list[PlanetChemistryResult] = []
+    fingerprints: list[str] = []
+    reused: list[bool] = []
     for column in batch.columns:
         column_star = _scaled_stellar_spectrum(
             batch.star, column.stellar_flux_scale
         )
-        key = _column_key(column, cfg, column_star)
+        key = column_state_fingerprint(
+            column, batch.star, cfg, database=database
+        )
+        was_reused = key in cache
         if key not in cache:
             cache[key] = solve_planet(
                 planet=column.planet,
@@ -958,6 +1019,34 @@ def solve_columns(
                 inventory=column.inventory,
                 surface=column.surface,
                 settings=cfg,
+                database=database,
             )
         output.append(cache[key])
-    return tuple(output)
+        fingerprints.append(key)
+        reused.append(was_reused)
+
+    unique_fingerprints = tuple(sorted(cache))
+    unique_index = {key: idx for idx, key in enumerate(unique_fingerprints)}
+    fallback_sets = [tuple(result.diagnostics.get("fallbacks", ())) for result in output]
+    input_count = len(output)
+    unique_count = len(cache)
+    diagnostics = ColumnBatchDiagnostics(
+        input_count=input_count,
+        unique_state_count=unique_count,
+        deduplicated_count=input_count - unique_count,
+        deduplication_ratio=(
+            float((input_count - unique_count) / input_count)
+            if input_count
+            else 0.0
+        ),
+        converged_count=sum(result.convergence.converged for result in output),
+        fallback_column_count=sum(bool(items) for items in fallback_sets),
+        fallback_event_count=sum(len(items) for items in fallback_sets),
+        fingerprints=tuple(fingerprints),
+        unique_fingerprints=unique_fingerprints,
+        unique_state_index=tuple(unique_index[key] for key in fingerprints),
+        reused=tuple(reused),
+        per_column_provenance=tuple(dict(result.provenance) for result in output),
+        database_sha256=database.revision_hash,
+    )
+    return ColumnBatchResult(tuple(output), diagnostics)

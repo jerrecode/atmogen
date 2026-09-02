@@ -335,3 +335,30 @@ class ColumnInput:
 class ColumnBatchInput:
     columns: tuple[ColumnInput, ...]
     star: StellarSpectrum
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnBatchDiagnostics:
+    """Stable diagnostics for one ordered batch request."""
+
+    input_count: int
+    unique_state_count: int
+    deduplicated_count: int
+    deduplication_ratio: float
+    converged_count: int
+    fallback_column_count: int
+    fallback_event_count: int
+    fingerprints: tuple[str, ...]
+    unique_fingerprints: tuple[str, ...]
+    unique_state_index: tuple[int, ...]
+    reused: tuple[bool, ...]
+    per_column_provenance: tuple[Mapping[str, object], ...]
+    database_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnBatchResult:
+    """State-aligned column results plus de-duplication/provenance diagnostics."""
+
+    results: tuple[PlanetChemistryResult, ...]
+    diagnostics: ColumnBatchDiagnostics
