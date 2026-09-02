@@ -34,7 +34,11 @@ Acceptance gate: worldgen can request thousands of geographically repeated repre
 
 ## Phase B — Elevation/pressure/topographic boundary support
 
-**Status:** planned.
+**Status:** implemented in API 11. Local columns can declare inherited, directly
+prescribed or hydrostatically adjusted surface-pressure boundaries. The public
+isothermal helper and batch diagnostics retain the parent pressure, elevation,
+reference temperature and molar-mass provenance without confusing terrain height
+with atmospheric profile altitude.
 
 Deliverables:
 

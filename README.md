@@ -194,3 +194,10 @@ provenance/fallback information and numerical residuals. Reaction-network data
 participate in the database revision hash. Standalone kinetics, transport, particle
 and precipitation calculations expose their conservation or integration diagnostics.
 No global random number generator is used.
+
+Local terrain-aware column batches may declare whether their surface pressure is
+inherited, prescribed directly, or adjusted hydrostatically from a parent datum.
+Use `pressure_from_elevation()` for the documented isothermal estimate and attach
+a `ColumnSurfaceBoundary` to the `ColumnInput`; batch diagnostics retain the full
+boundary provenance. Terrain elevation remains a host coordinate and is not added
+to the atmospheric profile altitude coordinate.

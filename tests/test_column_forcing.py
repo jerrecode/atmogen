@@ -1,13 +1,18 @@
+import pytest
+
 from atmogen import (
     API_SCHEMA_VERSION,
     BUILTIN_DATABASE,
     ColumnBatchInput,
     ColumnInput,
+    ColumnSurfaceBoundary,
     ElementInventory,
     PlanetPhysicalState,
     SolverSettings,
+    SurfaceBoundaryMode,
     blackbody_stellar_spectrum,
     column_state_fingerprint,
+    pressure_from_elevation,
     solve_columns,
     solve_columns_with_diagnostics,
     species_moles_to_elements,
@@ -63,7 +68,7 @@ def test_public_column_fingerprint_is_stable_and_versioned():
     second = column_state_fingerprint(ColumnInput(planet, inventory_b), star, settings)
     assert first == second
     assert len(first) == 64
-    assert API_SCHEMA_VERSION == 10
+    assert API_SCHEMA_VERSION == 11
     assert len(BUILTIN_DATABASE.revision_hash) == 64
 
     changed_setting = column_state_fingerprint(
@@ -125,3 +130,67 @@ def test_detailed_batch_diagnostics_are_order_independent_and_state_aligned():
         first.results[1].atmosphere.temperature_k[0]
         == reordered.results[0].atmosphere.temperature_k[0]
     )
+
+
+def test_hydrostatic_surface_pressure_boundary_tracks_highlands_and_basins():
+    parent_pressure = 101325.0
+    kwargs = {
+        "gravity_m_s2": 9.80665,
+        "reference_temperature_k": 280.0,
+        "mean_molar_mass_kg_mol": 0.02897,
+    }
+    mountain = pressure_from_elevation(parent_pressure, 2500.0, **kwargs)
+    basin = pressure_from_elevation(parent_pressure, -500.0, **kwargs)
+    assert mountain < parent_pressure < basin
+    assert pressure_from_elevation(parent_pressure, 0.0, **kwargs) == parent_pressure
+
+
+def test_adjusted_boundary_is_validated_and_reported_by_batch():
+    species = {"N2": 0.79, "O2": 0.21}
+    inventory = ElementInventory(
+        species_moles_to_elements(species), species, "boundary-regression"
+    )
+    parent_pressure = 101325.0
+    elevation = 1800.0
+    temperature = 278.0
+    molar_mass = 0.02885
+    pressure = pressure_from_elevation(
+        parent_pressure,
+        elevation,
+        gravity_m_s2=9.80665,
+        reference_temperature_k=temperature,
+        mean_molar_mass_kg_mol=molar_mass,
+    )
+    boundary = ColumnSurfaceBoundary(
+        mode=SurfaceBoundaryMode.HYDROSTATIC_ADJUSTED,
+        elevation_delta_m=elevation,
+        parent_surface_pressure_pa=parent_pressure,
+        reference_temperature_k=temperature,
+        mean_molar_mass_kg_mol=molar_mass,
+    )
+    column = ColumnInput(
+        PlanetPhysicalState(6.371e6, 9.80665, pressure, temperature, 0.2),
+        inventory,
+        surface_boundary=boundary,
+    )
+    result = solve_columns_with_diagnostics(
+        ColumnBatchInput(
+            (column,), blackbody_stellar_spectrum(5772.0, 1361.0)
+        ),
+        SolverSettings(chemistry_mode="fixed_species", vertical_layers=8),
+    )
+    assert result.diagnostics.surface_boundary_modes == (
+        "hydrostatic_adjusted",
+    )
+    recorded = result.diagnostics.surface_boundaries[0]
+    assert recorded["surface_pressure_pa"] == pressure
+    assert recorded["parent_surface_pressure_pa"] == parent_pressure
+    assert recorded["elevation_delta_m"] == elevation
+    assert result.results[0].surface.mass_closure_relative < 1e-10
+
+    with pytest.raises(ValueError, match="does not match"):
+        ColumnInput(
+            PlanetPhysicalState(6.371e6, 9.80665, parent_pressure, temperature),
+            inventory,
+            surface_boundary=boundary,
+        )

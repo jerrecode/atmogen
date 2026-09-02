@@ -1028,6 +1028,17 @@ def solve_columns_with_diagnostics(
     unique_fingerprints = tuple(sorted(cache))
     unique_index = {key: idx for idx, key in enumerate(unique_fingerprints)}
     fallback_sets = [tuple(result.diagnostics.get("fallbacks", ())) for result in output]
+    surface_boundaries = tuple(
+        {
+            "mode": column.surface_boundary.mode.value,
+            "surface_pressure_pa": float(column.planet.surface_pressure_pa),
+            "elevation_delta_m": float(column.surface_boundary.elevation_delta_m),
+            "parent_surface_pressure_pa": column.surface_boundary.parent_surface_pressure_pa,
+            "reference_temperature_k": column.surface_boundary.reference_temperature_k,
+            "mean_molar_mass_kg_mol": column.surface_boundary.mean_molar_mass_kg_mol,
+        }
+        for column in batch.columns
+    )
     input_count = len(output)
     unique_count = len(cache)
     diagnostics = ColumnBatchDiagnostics(
@@ -1047,6 +1058,10 @@ def solve_columns_with_diagnostics(
         unique_state_index=tuple(unique_index[key] for key in fingerprints),
         reused=tuple(reused),
         per_column_provenance=tuple(dict(result.provenance) for result in output),
+        surface_boundary_modes=tuple(
+            column.surface_boundary.mode.value for column in batch.columns
+        ),
+        surface_boundaries=surface_boundaries,
         database_sha256=database.revision_hash,
     )
     return ColumnBatchResult(tuple(output), diagnostics)

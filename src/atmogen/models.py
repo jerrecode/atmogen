@@ -15,6 +15,12 @@ class Fidelity(str, Enum):
     REFERENCE = "REFERENCE"
 
 
+class SurfaceBoundaryMode(str, Enum):
+    INHERITED = "inherited"
+    HYDROSTATIC_ADJUSTED = "hydrostatic_adjusted"
+    PRESCRIBED = "prescribed"
+
+
 @dataclass(frozen=True, slots=True)
 class PlanetPhysicalState:
     """Bulk boundary conditions, in SI units."""
@@ -319,16 +325,66 @@ class PlanetChemistryResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ColumnSurfaceBoundary:
+    """Provenance for the surface-pressure boundary of a local column."""
+
+    mode: SurfaceBoundaryMode = SurfaceBoundaryMode.INHERITED
+    elevation_delta_m: float = 0.0
+    parent_surface_pressure_pa: float | None = None
+    reference_temperature_k: float | None = None
+    mean_molar_mass_kg_mol: float | None = None
+
+    def __post_init__(self) -> None:
+        if not np.isfinite(self.elevation_delta_m):
+            raise ValueError("elevation_delta_m must be finite")
+        if self.mode is SurfaceBoundaryMode.HYDROSTATIC_ADJUSTED:
+            for name in (
+                "parent_surface_pressure_pa",
+                "reference_temperature_k",
+                "mean_molar_mass_kg_mol",
+            ):
+                value = getattr(self, name)
+                if value is None or not np.isfinite(value) or value <= 0:
+                    raise ValueError(
+                        f"{name} must be finite and positive for hydrostatic adjustment"
+                    )
+
+
+@dataclass(frozen=True, slots=True)
 class ColumnInput:
     planet: PlanetPhysicalState
     inventory: ElementInventory
     surface: SurfaceReservoirs = field(default_factory=SurfaceReservoirs)
     stellar_flux_scale: float = 1.0
+    surface_boundary: ColumnSurfaceBoundary = field(
+        default_factory=ColumnSurfaceBoundary
+    )
 
     def __post_init__(self) -> None:
         scale = float(self.stellar_flux_scale)
         if not np.isfinite(scale) or scale < 0:
             raise ValueError("stellar_flux_scale must be finite and non-negative")
+        if self.surface_boundary.mode is SurfaceBoundaryMode.HYDROSTATIC_ADJUSTED:
+            from .boundary import pressure_from_elevation
+
+            expected = pressure_from_elevation(
+                float(self.surface_boundary.parent_surface_pressure_pa),
+                self.surface_boundary.elevation_delta_m,
+                gravity_m_s2=self.planet.gravity_m_s2,
+                reference_temperature_k=float(
+                    self.surface_boundary.reference_temperature_k
+                ),
+                mean_molar_mass_kg_mol=float(
+                    self.surface_boundary.mean_molar_mass_kg_mol
+                ),
+            )
+            if not np.isclose(
+                self.planet.surface_pressure_pa, expected, rtol=1e-12, atol=0.0
+            ):
+                raise ValueError(
+                    "planet surface pressure does not match the declared "
+                    "hydrostatic-adjusted boundary"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,6 +409,8 @@ class ColumnBatchDiagnostics:
     unique_state_index: tuple[int, ...]
     reused: tuple[bool, ...]
     per_column_provenance: tuple[Mapping[str, object], ...]
+    surface_boundary_modes: tuple[str, ...]
+    surface_boundaries: tuple[Mapping[str, object], ...]
     database_sha256: str
 
 

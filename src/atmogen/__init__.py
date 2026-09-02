@@ -1,5 +1,7 @@
 """Typed public API for the standalone atmogen physical-column engine."""
 
+from .boundary import pressure_from_elevation
+
 from .cloud_microphysics import (ParticleOpticalCoefficients, ParticlePopulation,
                                  PrecipitationStepResult, SedimentationResult,
                                  SettlingResult, cunningham_slip_correction,
@@ -16,9 +18,9 @@ from .liquids import (ActivityModel, IdealActivityModel, LiquidPhaseSplitResult,
                       NRTLActivityModel, liquid_mixture_density_kg_m3,
                       liquid_phase_stability, select_activity_model)
 from .models import (ColumnBatchDiagnostics, ColumnBatchInput, ColumnBatchResult,
-                     ColumnInput, ElementInventory, Fidelity,
+                     ColumnInput, ColumnSurfaceBoundary, ElementInventory, Fidelity,
                      LiquidPhaseState, PlanetChemistryResult, PlanetPhysicalState,
-                     SolverSettings, StellarSpectrum, SurfaceReservoirs,
+                     SolverSettings, StellarSpectrum, SurfaceBoundaryMode, SurfaceReservoirs,
                      VerticalProcessResult)
 from .optics import (FresnelReflectance, MieEfficiencies,
                      absorption_coefficient_m_inv, fresnel_reflectance,
@@ -38,13 +40,14 @@ from .version import API_SCHEMA_VERSION, DATA_SCHEMA_VERSION, __version__
 
 __all__ = ["API_SCHEMA_VERSION", "ActivityModel", "BUILTIN_DATABASE", "ChemicalDatabase",
            "ColumnBatchDiagnostics", "ColumnBatchInput", "ColumnBatchResult", "ColumnInput",
+           "ColumnSurfaceBoundary",
            "DATA_SCHEMA_VERSION", "ElementInventory", "Fidelity",
            "FresnelReflectance", "IdealActivityModel", "KineticsResult", "LiquidPhaseSplitResult",
            "LiquidPhaseState", "MieEfficiencies", "NRTLActivityModel", "NRTLInteraction",
            "ParticleOpticalCoefficients", "ParticlePopulation", "PhotolysisData",
            "PlanetChemistryResult", "PlanetPhysicalState", "PrecipitationStepResult",
            "ProvenanceClass", "QuenchDiagnostic", "Reaction", "SedimentationResult",
-           "SettlingResult", "SolverSettings", "Species", "StellarSpectrum", "SurfaceReservoirs",
+           "SettlingResult", "SolverSettings", "Species", "StellarSpectrum", "SurfaceBoundaryMode", "SurfaceReservoirs",
            "VerticalProcessResult", "VerticalTransportResult", "__version__",
            "absorption_coefficient_m_inv", "arrhenius_rate_constant",
            "attenuate_actinic_photon_flux", "blackbody_stellar_spectrum", "column_state_fingerprint",
@@ -54,7 +57,7 @@ __all__ = ["API_SCHEMA_VERSION", "ActivityModel", "BUILTIN_DATABASE", "ChemicalD
            "layer_thickness_from_centres", "liquid_mixture_density_kg_m3",
            "liquid_phase_stability", "lorentz_lorenz_mix", "mie_sphere_efficiencies",
            "mixing_timescale_s", "particle_optical_coefficients", "photolysis_rate_s1",
-           "precipitation_step", "quench_diagnostic", "rayleigh_sphere_efficiencies",
+           "precipitation_step", "pressure_from_elevation", "quench_diagnostic", "rayleigh_sphere_efficiencies",
            "reaction_element_residual", "reaction_rates", "sedimentation_mass_flux",
            "select_activity_model", "solve_columns", "solve_columns_with_diagnostics",
            "solve_planet", "solve_vertical_processes",
