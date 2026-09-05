@@ -136,6 +136,25 @@ de-duplication, including the solver settings and chemical-database revision.
 reporting unique-state counts, de-duplication, convergence, fallbacks, fingerprints
 and per-column provenance for host-side caches and request coalescing.
 
+## Spatial liquid transport screening
+
+The material-property interface exposes both scalar and spatial screening laws for
+liquid mixtures. `liquid_mixture_transport_fields` applies the same ideal-volume
+density, mass-fraction logarithmic-viscosity, and linear surface-tension mixture law
+cell by cell, with an explicit `active_mask` for cells containing liquid mass.
+
+For large host-model rasters, pass `include_mass_fractions=False`. This compact mode
+returns the same density, dynamic-viscosity, surface-tension, total-mass,
+active-mask, component-provenance, and method results while leaving
+`mass_fractions` empty. It reuses one fraction workspace instead of retaining one
+full-size fraction raster per species. The default remains
+`include_mass_fractions=True` for backward compatibility. Neither mode mutates
+caller-provided mass arrays.
+
+These remain screening-grade reference properties rather than temperature/pressure-
+dependent transport fits, and missing positive-mass component data causes an
+explicit `None` result rather than a fabricated fallback.
+
 ## Fidelity semantics
 
 `FAST` prioritizes compatibility and speed. Its automatic thermal profile is
