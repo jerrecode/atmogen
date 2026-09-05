@@ -44,9 +44,30 @@ class IdealGibbsEquilibrium:
 
     def solve(self, *, temperature_k: float, pressure_pa: float, element_moles: Mapping[str, float],
               initial_species_moles: Mapping[str, float] | None = None) -> EquilibriumResult:
-        if temperature_k <= 0 or pressure_pa <= 0:
-            raise ValueError("temperature and pressure must be positive")
-        elements = tuple(sorted(k for k, v in element_moles.items() if v > 0))
+        temperature = float(temperature_k)
+        pressure = float(pressure_pa)
+        if (
+            not np.isfinite(temperature)
+            or not np.isfinite(pressure)
+            or temperature <= 0.0
+            or pressure <= 0.0
+        ):
+            raise ValueError("temperature and pressure must be finite and positive")
+        validated_elements: dict[str, float] = {}
+        for raw_key, raw_value in element_moles.items():
+            key = str(raw_key)
+            value = float(raw_value)
+            if not key or not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"invalid element inventory entry {raw_key!r}: {raw_value!r}")
+            validated_elements[key] = value
+        validated_hints: dict[str, float] = {}
+        for raw_key, raw_value in (initial_species_moles or {}).items():
+            key = str(raw_key)
+            value = float(raw_value)
+            if not key or not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"invalid initial species entry {raw_key!r}: {raw_value!r}")
+            validated_hints[key] = value
+        elements = tuple(sorted(k for k, v in validated_elements.items() if v > 0))
         if not elements:
             raise ValueError("element inventory has no positive amounts")
         candidates = [sp for sp in self.database.species.values()
@@ -57,13 +78,13 @@ class IdealGibbsEquilibrium:
         if not candidates:
             raise ValueError(f"no candidate species can represent elements {elements}")
         a = np.asarray([[sp.formula.get(el, 0) for sp in candidates] for el in elements], float)
-        b = np.asarray([element_moles[el] for el in elements], float)
+        b = np.asarray([validated_elements[el] for el in elements], float)
         scale = max(float(np.max(b)), 1e-30)
         bs = b / scale
         floor = 1e-16
 
         x0 = np.full(len(candidates), floor)
-        hints = initial_species_moles or {}
+        hints = validated_hints
         for idx, sp in enumerate(candidates):
             x0[idx] = max(float(hints.get(sp.key, 0.0)) / scale, floor)
         # Find a non-negative element-feasible starting point if hints are absent or inconsistent.
@@ -74,7 +95,7 @@ class IdealGibbsEquilibrium:
         if feasibility.success:
             x0 = np.maximum(feasibility.x, floor)
 
-        g0 = np.asarray([sp.standard_gibbs_j_mol(temperature_k) for sp in candidates], float)
+        g0 = np.asarray([sp.standard_gibbs_j_mol(temperature) for sp in candidates], float)
         gas = np.asarray([sp.phase == "gas" for sp in candidates])
 
         def objective(x: np.ndarray) -> float:
@@ -82,9 +103,9 @@ class IdealGibbsEquilibrium:
             gas_total = max(float(np.sum(safe[gas])), floor)
             mu = g0.copy()
             if np.any(gas):
-                activity = safe[gas] / gas_total * pressure_pa / STANDARD_PRESSURE_PA
-                mu[gas] += R_GAS * temperature_k * np.log(np.maximum(activity, floor))
-            return float(np.dot(safe, mu) / (R_GAS * temperature_k))
+                activity = safe[gas] / gas_total * pressure / STANDARD_PRESSURE_PA
+                mu[gas] += R_GAS * temperature * np.log(np.maximum(activity, floor))
+            return float(np.dot(safe, mu) / (R_GAS * temperature))
 
         result = minimize(objective, x0, method="SLSQP", bounds=[(0.0, None)] * len(candidates),
                           constraints=[LinearConstraint(a, bs, bs)],
@@ -98,13 +119,24 @@ class IdealGibbsEquilibrium:
         total_gas = sum(gas_amounts.values())
         fractions = {key: value / total_gas for key, value in gas_amounts.items()} if total_gas > 0 else {}
         converged = bool(result.success and rel <= 2e-8 and all(v >= 0 for v in amounts.values()))
-        return EquilibriumResult(amounts, fractions, rel, objective(np.asarray(result.x)) * R_GAS * temperature_k * scale,
+        return EquilibriumResult(amounts, fractions, rel, objective(np.asarray(result.x)) * R_GAS * temperature * scale,
                                  converged, int(getattr(result, "nit", 0)), tuple(sp.key for sp in candidates),
                                  pruned, "scipy-slsqp-ideal-gibbs-v1", str(result.message))
 
 
 def normalized_initial_composition(initial_species_moles: Mapping[str, float]) -> dict[str, float]:
-    positive = {str(k): float(v) for k, v in initial_species_moles.items() if float(v) > 0}
+    positive: dict[str, float] = {}
+    for raw_key, raw_value in initial_species_moles.items():
+        key = str(raw_key)
+        value = float(raw_value)
+        if not key or not np.isfinite(value) or value < 0.0:
+            raise ValueError(
+                f"invalid initial molecular state entry {raw_key!r}: {raw_value!r}"
+            )
+        if value > 0.0:
+            if key in positive:
+                raise ValueError("duplicate initial molecular state key after string normalization")
+            positive[key] = value
     total = sum(positive.values())
     if total <= 0:
         raise ValueError("fixed_species chemistry requires a positive initial molecular state")
