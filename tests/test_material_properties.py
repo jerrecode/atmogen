@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from atmogen import (
     BUILTIN_FLUID_TRANSPORT,
@@ -124,8 +125,6 @@ def test_vectorized_transport_fields_coalesce_aliases_and_validate_contracts():
         species_mass_kg={"H2O": np.ones(2), "C_graphite": np.ones(2)}
     ) is None
 
-    import pytest
-
     with pytest.raises(ValueError, match="one shape"):
         liquid_mixture_transport_fields(
             species_mass_kg={"H2O": np.ones(2), "CH4": np.ones(3)}
@@ -137,4 +136,66 @@ def test_vectorized_transport_fields_coalesce_aliases_and_validate_contracts():
     with pytest.raises(ValueError, match="finite and non-negative"):
         liquid_mixture_transport_fields(
             species_mass_kg={"H2O": np.array([1.0, -1.0])}
+        )
+
+
+def test_compact_vectorized_transport_matches_full_properties_without_retained_fractions():
+    species_mass = {
+        "H2O": np.array([[1.0, 0.0, 1.0], [3.0, 2.0, 0.0]], dtype=np.float64),
+        "CH4": np.array([[0.0, 2.0, 1.0], [1.0, 0.0, 0.0]], dtype=np.float64),
+        "NH3": np.array([[0.0, 0.0, 1.0], [0.5, 1.0, 0.0]], dtype=np.float64),
+    }
+    before = {key: value.copy() for key, value in species_mass.items()}
+
+    full = liquid_mixture_transport_fields(species_mass_kg=species_mass)
+    compact = liquid_mixture_transport_fields(
+        species_mass_kg=species_mass,
+        include_mass_fractions=False,
+    )
+
+    assert full is not None and compact is not None
+    np.testing.assert_array_equal(compact.active_mask, full.active_mask)
+    np.testing.assert_array_equal(compact.total_mass_kg, full.total_mass_kg)
+    np.testing.assert_allclose(compact.density_kg_m3, full.density_kg_m3, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(
+        compact.dynamic_viscosity_pa_s,
+        full.dynamic_viscosity_pa_s,
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        compact.surface_tension_n_m,
+        full.surface_tension_n_m,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert compact.mass_fractions == {}
+    assert set(compact.component_properties) == set(full.component_properties)
+    assert "omitted by compact mode" in compact.method
+    assert "omitted by compact mode" not in full.method
+
+    for key, value in species_mass.items():
+        np.testing.assert_array_equal(value, before[key])
+
+
+def test_compact_vectorized_transport_coalesces_aliases_without_fraction_outputs():
+    result = liquid_mixture_transport_fields(
+        species_mass_kg={
+            "water": np.array([1.0, 0.0], dtype=np.float64),
+            "H2O": np.array([2.0, 0.0], dtype=np.float64),
+        },
+        include_mass_fractions=False,
+    )
+    assert result is not None
+    assert result.mass_fractions == {}
+    assert set(result.component_properties) == {"H2O"}
+    assert np.isclose(result.total_mass_kg[0], 3.0)
+
+
+@pytest.mark.parametrize("value", [0, 1, None, "false"])
+def test_vectorized_transport_rejects_non_boolean_fraction_retention_flag(value):
+    with pytest.raises(TypeError, match="include_mass_fractions.*boolean"):
+        liquid_mixture_transport_fields(
+            species_mass_kg={"H2O": np.ones(2)},
+            include_mass_fractions=value,
         )
