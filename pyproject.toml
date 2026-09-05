@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atmogen"
-version = "0.12.0"
+version = "0.13.0"
 description = "Deterministic vertical atmosphere, reservoir, chemistry, cloud microphysics, saturated radiative-convective structure, and spectral-radiation solver for procedural planets"
 readme = "README.md"
 license = "MIT"

@@ -38,7 +38,7 @@ from .transport import (QuenchDiagnostic, VerticalTransportResult,
 from .vertical_processes import layer_thickness_from_centres, solve_vertical_processes
 from .version import API_SCHEMA_VERSION, DATA_SCHEMA_VERSION, __version__
 
-__all__ = ["API_SCHEMA_VERSION", "ActivityModel", "BUILTIN_DATABASE", "ChemicalDatabase",
+__all__ = ["API_SCHEMA_VERSION", "ActivityModel", "BUILTIN_DATABASE", "BUILTIN_FLUID_TRANSPORT", "ChemicalDatabase",
            "ColumnBatchDiagnostics", "ColumnBatchInput", "ColumnBatchResult", "ColumnInput",
            "ColumnSurfaceBoundary",
            "DATA_SCHEMA_VERSION", "ElementInventory", "Fidelity",
