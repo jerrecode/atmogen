@@ -68,7 +68,7 @@ def test_public_column_fingerprint_is_stable_and_versioned():
     second = column_state_fingerprint(ColumnInput(planet, inventory_b), star, settings)
     assert first == second
     assert len(first) == 64
-    assert API_SCHEMA_VERSION == 11
+    assert API_SCHEMA_VERSION == 12
     assert len(BUILTIN_DATABASE.revision_hash) == 64
 
     changed_setting = column_state_fingerprint(
