@@ -56,6 +56,24 @@ class LiquidMixtureTransportProperties:
     method: str
 
 
+@dataclass(frozen=True, slots=True)
+class LiquidMixtureTransportFields:
+    """Vectorized screening properties with an explicit validity mask.
+
+    Property arrays are zero where active_mask is false. Consumers must use the
+    mask rather than interpreting those zeros as physical liquid properties.
+    """
+
+    density_kg_m3: np.ndarray
+    dynamic_viscosity_pa_s: np.ndarray
+    surface_tension_n_m: np.ndarray
+    total_mass_kg: np.ndarray
+    active_mask: np.ndarray
+    mass_fractions: Mapping[str, np.ndarray]
+    component_properties: Mapping[str, FluidTransportProperties]
+    method: str
+
+
 def _screening(
     species: str,
     reference_temperature_k: float,
@@ -192,10 +210,112 @@ def liquid_mixture_transport_properties(
     )
 
 
+def liquid_mixture_transport_fields(
+    *,
+    species_mass_kg: Mapping[str, np.ndarray],
+    database: ChemicalDatabase = BUILTIN_DATABASE,
+    transport_database: Mapping[str, FluidTransportProperties] = BUILTIN_FLUID_TRANSPORT,
+) -> LiquidMixtureTransportFields | None:
+    """Vectorize the scalar screening mixture law over equal-shaped mass fields.
+
+    Species aliases are canonicalized and duplicate aliases are added together.
+    Every mass field must be finite, non-negative, and have the same shape. If no
+    cell contains positive liquid mass, or if any species with positive mass lacks
+    transport data, None is returned. Property arrays are exactly zero in inactive
+    cells and active_mask identifies cells where the values are meaningful.
+    """
+    if not species_mass_kg:
+        return None
+
+    canonical_mass: dict[str, np.ndarray] = {}
+    shape: tuple[int, ...] | None = None
+    for raw_key, raw_values in species_mass_kg.items():
+        key = canonical_species(raw_key)
+        values = np.asarray(raw_values, dtype=np.float64)
+        if shape is None:
+            shape = values.shape
+        elif values.shape != shape:
+            raise ValueError(
+                f"species mass fields must have one shape; {key!r} has "
+                f"{values.shape}, expected {shape}"
+            )
+        if not np.isfinite(values).all() or np.any(values < 0.0):
+            raise ValueError(
+                f"species mass field {raw_key!r} must be finite and non-negative"
+            )
+        if key in canonical_mass:
+            canonical_mass[key] = canonical_mass[key] + values
+        else:
+            canonical_mass[key] = values.copy()
+
+    assert shape is not None
+    positive_species = {
+        key for key, values in canonical_mass.items() if np.any(values > 0.0)
+    }
+    if not positive_species:
+        return None
+
+    component: dict[str, FluidTransportProperties] = {}
+    for key in sorted(positive_species):
+        props = transport_database.get(key)
+        if props is None:
+            return None
+        database.get(key)
+        component[key] = props
+
+    total_mass = np.zeros(shape, dtype=np.float64)
+    for key in positive_species:
+        total_mass += canonical_mass[key]
+    active = total_mass > 0.0
+
+    fractions: dict[str, np.ndarray] = {}
+    specific_volume = np.zeros(shape, dtype=np.float64)
+    log_viscosity = np.zeros(shape, dtype=np.float64)
+    tension = np.zeros(shape, dtype=np.float64)
+    for key in sorted(positive_species):
+        fraction = np.divide(
+            canonical_mass[key],
+            total_mass,
+            out=np.zeros(shape, dtype=np.float64),
+            where=active,
+        )
+        fractions[key] = fraction
+        props = component[key]
+        specific_volume += fraction / props.density_kg_m3
+        log_viscosity += fraction * np.log(props.dynamic_viscosity_pa_s)
+        tension += fraction * props.surface_tension_n_m
+
+    density = np.divide(
+        1.0,
+        specific_volume,
+        out=np.zeros(shape, dtype=np.float64),
+        where=active,
+    )
+    viscosity = np.zeros(shape, dtype=np.float64)
+    viscosity[active] = np.exp(log_viscosity[active])
+    tension[~active] = 0.0
+
+    return LiquidMixtureTransportFields(
+        density_kg_m3=density,
+        dynamic_viscosity_pa_s=viscosity,
+        surface_tension_n_m=tension,
+        total_mass_kg=total_mass,
+        active_mask=active,
+        mass_fractions=fractions,
+        component_properties=component,
+        method=(
+            "vectorized ideal-volume density + mass-fraction log-viscosity + "
+            "linear surface-tension screening blend"
+        ),
+    )
+
+
 __all__ = [
     "BUILTIN_FLUID_TRANSPORT",
     "FluidTransportProperties",
+    "LiquidMixtureTransportFields",
     "LiquidMixtureTransportProperties",
     "fluid_transport_properties",
+    "liquid_mixture_transport_fields",
     "liquid_mixture_transport_properties",
 ]

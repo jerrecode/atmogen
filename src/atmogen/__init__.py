@@ -43,8 +43,10 @@ from .liquids import (
 from .material_properties import (
     BUILTIN_FLUID_TRANSPORT,
     FluidTransportProperties,
+    LiquidMixtureTransportFields,
     LiquidMixtureTransportProperties,
     fluid_transport_properties,
+    liquid_mixture_transport_fields,
     liquid_mixture_transport_properties,
 )
 from .models import (
@@ -116,6 +118,7 @@ __all__ = [
     "FresnelReflectance",
     "IdealActivityModel",
     "KineticsResult",
+    "LiquidMixtureTransportFields",
     "LiquidMixtureTransportProperties",
     "LiquidPhaseSplitResult",
     "LiquidPhaseState",
@@ -156,6 +159,7 @@ __all__ = [
     "integrate_kinetics",
     "layer_thickness_from_centres",
     "liquid_mixture_density_kg_m3",
+    "liquid_mixture_transport_fields",
     "liquid_mixture_transport_properties",
     "liquid_phase_stability",
     "lorentz_lorenz_mix",
