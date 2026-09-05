@@ -20,18 +20,34 @@ from .database import BUILTIN_DATABASE, ChemicalDatabase, canonical_species
 DEFAULT_GRAY_OPTICAL_DEPTH_PRESSURE_EXPONENT = 2.0
 
 
+def _validated_mole_fractions(
+    mole_fractions: Mapping[str, float],
+    database: ChemicalDatabase,
+) -> dict[str, float]:
+    combined: dict[str, float] = {}
+    for raw_key, raw_value in mole_fractions.items():
+        value = float(raw_value)
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError("mole_fractions must be finite and non-negative")
+        key = canonical_species(raw_key)
+        database.get(key)
+        if value > 0.0:
+            combined[key] = combined.get(key, 0.0) + value
+    total = float(sum(combined.values()))
+    if total <= 0.0:
+        raise ValueError("mole_fractions must contain positive material")
+    return {key: value / total for key, value in combined.items()}
+
+
 def mixture_molar_heat_capacity_j_mol_k(
     mole_fractions: Mapping[str, float],
     database: ChemicalDatabase = BUILTIN_DATABASE,
 ) -> float:
     """Return ideal-mixture molar constant-pressure heat capacity."""
-    positive = {str(k): max(float(v), 0.0) for k, v in mole_fractions.items()}
-    total = float(sum(positive.values()))
-    if total <= 0:
-        raise ValueError("mole_fractions must contain positive material")
+    normalized = _validated_mole_fractions(mole_fractions, database)
     cp = sum(
-        (value / total) * database.get(key).heat_capacity_j_mol_k
-        for key, value in positive.items()
+        value * database.get(key).heat_capacity_j_mol_k
+        for key, value in normalized.items()
     )
     if not np.isfinite(cp) or cp <= R_GAS:
         raise ValueError("mixture heat capacity must be finite and greater than R")
@@ -56,10 +72,10 @@ def _dry_carrier_properties(
 ) -> tuple[float, float, float]:
     """Return carrier molar mass, R_specific, and Cp_specific excluding condensable."""
     vapor = canonical_species(condensible)
+    all_normalized = _validated_mole_fractions(mole_fractions, database)
     carrier = {
-        canonical_species(key): max(float(value), 0.0)
-        for key, value in mole_fractions.items()
-        if canonical_species(key) != vapor and float(value) > 0
+        key: value for key, value in all_normalized.items()
+        if key != vapor and value > 0.0
     }
     total = float(sum(carrier.values()))
     if total <= 0:
