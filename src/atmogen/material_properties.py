@@ -215,6 +215,7 @@ def liquid_mixture_transport_fields(
     species_mass_kg: Mapping[str, np.ndarray],
     database: ChemicalDatabase = BUILTIN_DATABASE,
     transport_database: Mapping[str, FluidTransportProperties] = BUILTIN_FLUID_TRANSPORT,
+    include_mass_fractions: bool = True,
 ) -> LiquidMixtureTransportFields | None:
     """Vectorize the scalar screening mixture law over equal-shaped mass fields.
 
@@ -223,7 +224,14 @@ def liquid_mixture_transport_fields(
     cell contains positive liquid mass, or if any species with positive mass lacks
     transport data, None is returned. Property arrays are exactly zero in inactive
     cells and active_mask identifies cells where the values are meaningful.
+
+    include_mass_fractions=False is a host-facing compact mode for large spatial
+    grids. It returns the same mixture properties, total mass, active mask, component
+    provenance and method semantics while leaving mass_fractions empty instead of
+    retaining one full-size array per species.
     """
+    if not isinstance(include_mass_fractions, bool):
+        raise TypeError("include_mass_fractions must be a boolean")
     if not species_mass_kg:
         return None
 
@@ -246,7 +254,10 @@ def liquid_mixture_transport_fields(
         if key in canonical_mass:
             canonical_mass[key] = canonical_mass[key] + values
         else:
-            canonical_mass[key] = values.copy()
+            # The solver never mutates component input fields, so a unique
+            # canonical float64 array can be referenced directly. Duplicate aliases
+            # still allocate their explicit sum above.
+            canonical_mass[key] = values
 
     assert shape is not None
     positive_species = {
@@ -272,14 +283,29 @@ def liquid_mixture_transport_fields(
     specific_volume = np.zeros(shape, dtype=np.float64)
     log_viscosity = np.zeros(shape, dtype=np.float64)
     tension = np.zeros(shape, dtype=np.float64)
+    compact_fraction = (
+        np.zeros(shape, dtype=np.float64)
+        if not include_mass_fractions
+        else None
+    )
     for key in sorted(positive_species):
-        fraction = np.divide(
-            canonical_mass[key],
-            total_mass,
-            out=np.zeros(shape, dtype=np.float64),
-            where=active,
-        )
-        fractions[key] = fraction
+        if include_mass_fractions:
+            fraction = np.divide(
+                canonical_mass[key],
+                total_mass,
+                out=np.zeros(shape, dtype=np.float64),
+                where=active,
+            )
+            fractions[key] = fraction
+        else:
+            assert compact_fraction is not None
+            compact_fraction.fill(0.0)
+            fraction = np.divide(
+                canonical_mass[key],
+                total_mass,
+                out=compact_fraction,
+                where=active,
+            )
         props = component[key]
         specific_volume += fraction / props.density_kg_m3
         log_viscosity += fraction * np.log(props.dynamic_viscosity_pa_s)
@@ -306,6 +332,11 @@ def liquid_mixture_transport_fields(
         method=(
             "vectorized ideal-volume density + mass-fraction log-viscosity + "
             "linear surface-tension screening blend"
+            + (
+                "; mass-fraction fields omitted by compact mode"
+                if not include_mass_fractions
+                else ""
+            )
         ),
     )
 
