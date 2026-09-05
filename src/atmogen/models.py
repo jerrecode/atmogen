@@ -137,8 +137,14 @@ class SolverSettings:
         return {Fidelity.FAST: 24, Fidelity.STANDARD: 48, Fidelity.HIGH: 96, Fidelity.REFERENCE: 160}[self.fidelity]
 
     def __post_init__(self) -> None:
-        if self.resolved_layers < 4:
-            raise ValueError("vertical_layers must be at least 4")
+        if self.vertical_layers is not None:
+            if (
+                not isinstance(self.vertical_layers, (int, np.integer))
+                or isinstance(self.vertical_layers, (bool, np.bool_))
+            ):
+                raise TypeError("vertical_layers must be an integer when supplied")
+            if int(self.vertical_layers) < 4:
+                raise ValueError("vertical_layers must be an integer of at least 4")
         if not np.isfinite(self.top_pressure_pa) or self.top_pressure_pa <= 0:
             raise ValueError("top_pressure_pa must be finite and positive")
         if self.chemistry_mode not in {"equilibrium", "fixed_species"}:
