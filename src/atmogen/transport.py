@@ -147,12 +147,16 @@ def integrate_eddy_diffusion(*, altitude_interface_m: np.ndarray,
         raise ValueError("total molar density must contain one finite positive value per layer")
     if not initial_mole_fractions:
         raise ValueError("initial_mole_fractions cannot be empty")
-    keys = tuple(sorted(str(key) for key in initial_mole_fractions))
-    if len(keys) != len(initial_mole_fractions):
-        raise ValueError("duplicate tracer keys after string normalization")
+    normalized_profiles: dict[str, np.ndarray] = {}
+    for raw_key, raw_values in initial_mole_fractions.items():
+        key = str(raw_key)
+        if key in normalized_profiles:
+            raise ValueError("duplicate tracer keys after string normalization")
+        normalized_profiles[key] = np.asarray(raw_values, dtype=float)
+    keys = tuple(sorted(normalized_profiles))
     initial = np.empty((len(keys), layers), dtype=float)
     for species_index, key in enumerate(keys):
-        values = np.asarray(initial_mole_fractions[key], dtype=float)
+        values = normalized_profiles[key]
         if values.shape != (layers,) or np.any(~np.isfinite(values)) or np.any(values < 0):
             raise ValueError(f"invalid mole-fraction profile for {key!r}")
         initial[species_index] = values
@@ -166,8 +170,10 @@ def integrate_eddy_diffusion(*, altitude_interface_m: np.ndarray,
         raise ValueError("duration_s must be finite and non-negative")
     if method not in {"BDF", "Radau"}:
         raise ValueError("transport method must be BDF or Radau")
-    if relative_tolerance <= 0 or absolute_tolerance <= 0:
-        raise ValueError("transport tolerances must be positive")
+    rtol = float(relative_tolerance)
+    atol = float(absolute_tolerance)
+    if not np.isfinite(rtol) or not np.isfinite(atol) or rtol <= 0.0 or atol <= 0.0:
+        raise ValueError("transport tolerances must be finite and positive")
 
     thickness = np.diff(interfaces)
     centers = 0.5 * (interfaces[:-1] + interfaces[1:])
@@ -204,8 +210,10 @@ def integrate_eddy_diffusion(*, altitude_interface_m: np.ndarray,
         t_eval = np.asarray([0.0, duration], dtype=float) if duration > 0 else np.asarray([0.0])
     else:
         t_eval = np.asarray(sample_times_s, dtype=float)
-        if t_eval.ndim != 1 or t_eval.size == 0 or np.any(~np.isfinite(t_eval)) or np.any(np.diff(t_eval) < 0):
-            raise ValueError("sample_times_s must be a finite sorted non-empty 1-D array")
+        if t_eval.ndim != 1 or t_eval.size == 0 or np.any(~np.isfinite(t_eval)):
+            raise ValueError("sample_times_s must be a finite non-empty 1-D array")
+        if np.any(np.diff(t_eval) <= 0):
+            raise ValueError("sample_times_s must be strictly increasing")
         if t_eval[0] < 0 or t_eval[-1] > duration:
             raise ValueError("sample_times_s must lie within [0, duration_s]")
         if t_eval[0] != 0.0:
@@ -221,7 +229,7 @@ def integrate_eddy_diffusion(*, altitude_interface_m: np.ndarray,
     else:
         solution = solve_ivp(
             rhs, (0.0, duration), y0, method=method, t_eval=t_eval,
-            rtol=float(relative_tolerance), atol=float(absolute_tolerance),
+            rtol=rtol, atol=atol,
             jac_sparsity=sparsity,
         )
         if not solution.success:
@@ -234,7 +242,7 @@ def integrate_eddy_diffusion(*, altitude_interface_m: np.ndarray,
         message = str(solution.message)
 
     minimum_raw = float(np.min(raw)) if raw.size else 0.0
-    negative_limit = max(50.0 * float(absolute_tolerance), 1e-12)
+    negative_limit = max(50.0 * atol, 1e-12)
     if minimum_raw < -negative_limit:
         raise RuntimeError(f"vertical transport produced negative mole fraction {minimum_raw:g}")
     clipped = np.maximum(raw, 0.0)
@@ -258,10 +266,10 @@ def integrate_eddy_diffusion(*, altitude_interface_m: np.ndarray,
 
     final_sum = np.sum(np.stack(tuple(final.values())), axis=0)
     max_sum = float(np.max(final_sum))
-    normalization_tolerance = max(2e-7, 20.0 * relative_tolerance)
+    normalization_tolerance = max(2e-7, 20.0 * rtol)
     if max_sum > 1.0 + normalization_tolerance:
         raise RuntimeError(f"vertical transport violated mole-fraction normalization: {max_sum:g}")
-    if max_relative > max(2e-7, 20.0 * relative_tolerance):
+    if max_relative > max(2e-7, 20.0 * rtol):
         raise RuntimeError(f"vertical transport column conservation failed: {max_relative:g}")
 
     return VerticalTransportResult(
