@@ -96,7 +96,11 @@ def _normalised_background(mole_fractions: Mapping[str, float],
     combined: dict[str, float] = {}
     for raw_key, value in mole_fractions.items():
         amount = float(value)
-        if amount <= 0:
+        if not np.isfinite(amount) or amount < 0.0:
+            raise ValueError(
+                "atmospheric_mole_fractions must be finite and non-negative"
+            )
+        if amount == 0.0:
             continue
         key = canonical_species(raw_key)
         database.get(key)
@@ -128,11 +132,16 @@ def atmospheric_composition_with_surface_vapor(
     atmospheric_mass = planet.surface_pressure_pa / planet.gravity_m_s2 * area
     dry_mean_mm = sum(database.get(key).molar_mass_kg_mol * value
                       for key, value in background.items())
-    vapor = {
-        canonical_species(key): max(float(value), 0.0)
-        for key, value in surface_vapor_mass_kg.items()
-        if float(value) > 0
-    }
+    vapor: dict[str, float] = {}
+    for raw_key, raw_value in surface_vapor_mass_kg.items():
+        mass = float(raw_value)
+        if not np.isfinite(mass) or mass < 0.0:
+            raise ValueError("surface vapor mass must be finite and non-negative")
+        if mass == 0.0:
+            continue
+        key = canonical_species(raw_key)
+        database.get(key)
+        vapor[key] = vapor.get(key, 0.0) + mass
     vapor_total = sum(vapor.values())
     if vapor_total > atmospheric_mass * (1.0 + 2.0e-12):
         raise ValueError("surface vapor mass exceeds the prescribed fixed-pressure atmospheric column")
@@ -198,8 +207,9 @@ def partition_surface_reservoirs(
     records and uses the ideal-solution fallback. The planet pressure is presently
     a fixed boundary rather than a solved reservoir variable.
     """
-    if temperature_k <= 0:
-        raise ValueError("temperature_k must be positive")
+    temperature = float(temperature_k)
+    if not np.isfinite(temperature) or temperature <= 0.0:
+        raise ValueError("temperature_k must be finite and positive")
     background = _normalised_background(atmospheric_mole_fractions, database)
     supplied: dict[str, float] = {}
     for raw_key, value in surface.species_mass_kg.items():
@@ -218,12 +228,12 @@ def partition_surface_reservoirs(
     psat: dict[str, float | None] = {}
     is_solid: dict[str, bool] = {}
     for key in supplied:
-        pressure, fallback = saturation_pressure_pa(key, temperature_k)
+        pressure, fallback = saturation_pressure_pa(key, temperature)
         psat[key] = pressure
         note(fallback)
         species = database.get(key)
         is_solid[key] = bool(
-            species.freezing_point_k is not None and temperature_k < species.freezing_point_k
+            species.freezing_point_k is not None and temperature < species.freezing_point_k
         )
 
     vapor = {key: 0.0 for key in supplied}
@@ -255,7 +265,7 @@ def partition_surface_reservoirs(
             for fallback in model_fallbacks:
                 note(fallback)
             gamma = model.activity_coefficients(
-                temperature_k=temperature_k, mole_fractions=x
+                temperature_k=temperature, mole_fractions=x
             )
             for key in liquid_keys:
                 target_y[key] = max(
@@ -353,7 +363,7 @@ def partition_surface_reservoirs(
             note(fallback)
         if liquid_phase_split and len(liquid_keys) > 1:
             split = liquid_phase_stability(
-                temperature_k=temperature_k, mole_fractions=overall_x,
+                temperature_k=temperature, mole_fractions=overall_x,
                 activity_model=model,
             )
             phase_fractions = split.phase_fractions_mol
@@ -384,7 +394,7 @@ def partition_surface_reservoirs(
             phase_mass = sum(species_mass.values())
             phase_volume = phase_mass / density if density is not None and density > 0 else None
             gamma = model.activity_coefficients(
-                temperature_k=temperature_k, mole_fractions=composition
+                temperature_k=temperature, mole_fractions=composition
             )
             liquid_phases.append(
                 LiquidPhaseState(

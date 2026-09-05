@@ -14,24 +14,69 @@ SIGMA_SB = 5.670374419e-8
 N_AVOGADRO = 6.02214076e23
 
 
-def planck_radiance_w_m2_sr_m(wavelength_m: np.ndarray, temperature_k: float) -> np.ndarray:
+def _validated_column_state(
+    *,
+    surface_pressure_pa: float,
+    gravity_m_s2: float,
+    mole_fractions: Mapping[str, float],
+    database: ChemicalDatabase,
+) -> tuple[float, float, dict[str, float]]:
+    pressure = float(surface_pressure_pa)
+    gravity = float(gravity_m_s2)
+    if not np.isfinite(pressure) or pressure <= 0.0:
+        raise ValueError("surface pressure must be finite and positive")
+    if not np.isfinite(gravity) or gravity <= 0.0:
+        raise ValueError("gravity must be finite and positive")
+    if not mole_fractions:
+        raise ValueError("mole fractions must have positive total")
+
+    composition: dict[str, float] = {}
+    total = 0.0
+    for key, raw_value in mole_fractions.items():
+        value = float(raw_value)
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError("mole fractions must be finite and non-negative")
+        database.get(key)
+        if value > 0.0:
+            composition[str(key)] = composition.get(str(key), 0.0) + value
+            total += value
+    if total <= 0.0:
+        raise ValueError("mole fractions must have positive total")
+    composition = {key: value / total for key, value in composition.items()}
+    return pressure, gravity, composition
+
+
+def _validated_wavelengths(wavelength_m: np.ndarray) -> np.ndarray:
     wave = np.asarray(wavelength_m, dtype=np.float64)
-    if temperature_k <= 0 or np.any(wave <= 0):
-        raise ValueError("temperature and wavelength must be positive")
-    x = np.clip(H_PLANCK * C_LIGHT / (wave * K_BOLTZMANN * temperature_k), 1e-12, 700.0)
+    if np.any(~np.isfinite(wave)) or np.any(wave <= 0.0):
+        raise ValueError("wavelength must be finite and positive")
+    return wave
+
+
+def planck_radiance_w_m2_sr_m(wavelength_m: np.ndarray, temperature_k: float) -> np.ndarray:
+    wave = _validated_wavelengths(wavelength_m)
+    temperature = float(temperature_k)
+    if not np.isfinite(temperature) or temperature <= 0.0:
+        raise ValueError("temperature must be finite and positive")
+    x = np.clip(H_PLANCK * C_LIGHT / (wave * K_BOLTZMANN * temperature), 1e-12, 700.0)
     return (2.0 * H_PLANCK * C_LIGHT**2 / wave**5) / np.expm1(x)
 
 
 def blackbody_stellar_spectrum(temperature_k: float, bolometric_flux_w_m2: float,
                                wavelength_m: np.ndarray | None = None) -> StellarSpectrum:
     wave = np.geomspace(1e-7, 1e-4, 1024) if wavelength_m is None else np.asarray(wavelength_m, float)
+    flux = float(bolometric_flux_w_m2)
+    if not np.isfinite(flux) or flux < 0.0:
+        raise ValueError("bolometric_flux_w_m2 must be finite and non-negative")
     shape = np.pi * planck_radiance_w_m2_sr_m(wave, temperature_k)
-    shape *= bolometric_flux_w_m2 / np.trapezoid(shape, wave)
+    shape *= flux / np.trapezoid(shape, wave)
     return StellarSpectrum(wave, shape, f"blackbody fallback at {temperature_k:g} K, normalized to supplied bolometric flux")
 
 
 def beer_lambert_transmission(optical_depth: np.ndarray | float) -> np.ndarray:
     tau = np.asarray(optical_depth, dtype=float)
+    if np.any(np.isnan(tau)):
+        raise ValueError("optical depth cannot contain NaN")
     if np.any(tau < 0):
         raise ValueError("optical depth cannot be negative")
     return np.exp(-np.clip(tau, 0.0, 745.0))
@@ -39,20 +84,28 @@ def beer_lambert_transmission(optical_depth: np.ndarray | float) -> np.ndarray:
 
 def rayleigh_cross_section_m2(species: str, wavelength_m: np.ndarray,
                               database: ChemicalDatabase = BUILTIN_DATABASE) -> np.ndarray:
+    wave = _validated_wavelengths(wavelength_m)
     reference = database.get(species).rayleigh_cross_section_550_m2
     if reference is None:
-        return np.zeros_like(np.asarray(wavelength_m, float))
-    return reference * (550e-9 / np.asarray(wavelength_m, float)) ** 4
+        return np.zeros_like(wave)
+    return reference * (550e-9 / wave) ** 4
 
 
 def rayleigh_optical_depth(*, wavelength_m: np.ndarray, surface_pressure_pa: float,
                            gravity_m_s2: float, mole_fractions: Mapping[str, float],
                            database: ChemicalDatabase = BUILTIN_DATABASE) -> np.ndarray:
-    mean_mm = sum(database.get(k).molar_mass_kg_mol * float(x) for k, x in mole_fractions.items())
-    total_molecules_m2 = surface_pressure_pa / gravity_m_s2 / mean_mm * N_AVOGADRO
-    tau = np.zeros_like(np.asarray(wavelength_m, float))
-    for key, fraction in mole_fractions.items():
-        tau += total_molecules_m2 * float(fraction) * rayleigh_cross_section_m2(key, wavelength_m, database)
+    wave = _validated_wavelengths(wavelength_m)
+    pressure, gravity, composition = _validated_column_state(
+        surface_pressure_pa=surface_pressure_pa,
+        gravity_m_s2=gravity_m_s2,
+        mole_fractions=mole_fractions,
+        database=database,
+    )
+    mean_mm = sum(database.get(k).molar_mass_kg_mol * x for k, x in composition.items())
+    total_molecules_m2 = pressure / gravity / mean_mm * N_AVOGADRO
+    tau = np.zeros_like(wave)
+    for key, fraction in composition.items():
+        tau += total_molecules_m2 * fraction * rayleigh_cross_section_m2(key, wave, database)
     return tau
 
 
@@ -94,19 +147,28 @@ def longwave_optical_depth(*, surface_pressure_pa: float, gravity_m_s2: float,
                            mole_fractions: Mapping[str, float],
                            additional_species_column_kg_m2: Mapping[str, float] | None = None,
                            database: ChemicalDatabase = BUILTIN_DATABASE) -> float:
-    mean_mm = sum(database.get(k).molar_mass_kg_mol * float(x) for k, x in mole_fractions.items())
-    column_mass = surface_pressure_pa / gravity_m_s2
+    pressure, gravity, composition = _validated_column_state(
+        surface_pressure_pa=surface_pressure_pa,
+        gravity_m_s2=gravity_m_s2,
+        mole_fractions=mole_fractions,
+        database=database,
+    )
+    mean_mm = sum(database.get(k).molar_mass_kg_mol * x for k, x in composition.items())
+    column_mass = pressure / gravity
     # FAST mode uses a bounded square-root column proxy. It represents saturation
     # and pressure-broadened band overlap better than linear gray absorption while
     # remaining explicitly empirical. Coefficients therefore have implied units
     # (kg m^-2)^-1/2 and are never presented as laboratory cross sections.
     tau = 0.0
-    for key, x in mole_fractions.items():
-        mass_fraction = float(x) * database.get(key).molar_mass_kg_mol / mean_mm
+    for key, x in composition.items():
+        mass_fraction = x * database.get(key).molar_mass_kg_mol / mean_mm
         species_column = max(column_mass * mass_fraction, 0.0)
         tau += database.get(key).longwave_column_coefficient_fast * np.sqrt(species_column)
     for key, species_column in (additional_species_column_kg_m2 or {}).items():
-        raw = database.get(key).longwave_column_coefficient_fast * np.sqrt(max(float(species_column), 0.0))
+        column = float(species_column)
+        if not np.isfinite(column) or column < 0.0:
+            raise ValueError("additional species columns must be finite and non-negative")
+        raw = database.get(key).longwave_column_coefficient_fast * np.sqrt(column)
         # A surface-supplied trace vapor cannot open unlimited independent gray
         # bands. Smooth saturation prevents the FAST proxy from inventing a moist
         # runaway solely because the same broad bands are counted repeatedly.

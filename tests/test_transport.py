@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from atmogen.transport import (eddy_diffusion_flux_mol_m2_s,
                                integrate_eddy_diffusion, mixing_timescale_s,
@@ -95,3 +96,55 @@ def test_mixing_timescale_and_quench_crossing_are_derived_not_hard_coded():
     )
     assert diagnostic.quenched.tolist() == [False, False, True, True]
     assert diagnostic.crossing_indices == (2,)
+
+
+
+def _small_transport_kwargs():
+    return {
+        "altitude_interface_m": np.asarray([0.0, 100.0, 200.0]),
+        "total_molar_density_mol_m3": np.asarray([10.0, 8.0]),
+        "eddy_diffusivity_m2_s": 5.0,
+        "duration_s": 100.0,
+    }
+
+
+def test_duplicate_tracer_names_after_string_normalization_are_rejected():
+    kwargs = _small_transport_kwargs()
+    with pytest.raises(ValueError, match="duplicate tracer keys"):
+        integrate_eddy_diffusion(
+            initial_mole_fractions={
+                1: np.asarray([0.2, 0.2]),
+                "1": np.asarray([0.3, 0.3]),
+            },
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    "rtol, atol",
+    [
+        (np.nan, 1.0e-12),
+        (np.inf, 1.0e-12),
+        (1.0e-8, np.nan),
+        (1.0e-8, np.inf),
+    ],
+)
+def test_transport_rejects_nonfinite_solver_tolerances(rtol, atol):
+    kwargs = _small_transport_kwargs()
+    with pytest.raises(ValueError, match="finite and positive"):
+        integrate_eddy_diffusion(
+            initial_mole_fractions={"A": np.asarray([0.2, 0.2])},
+            relative_tolerance=rtol,
+            absolute_tolerance=atol,
+            **kwargs,
+        )
+
+
+def test_transport_sample_times_must_be_strictly_increasing():
+    kwargs = _small_transport_kwargs()
+    with pytest.raises(ValueError, match="strictly increasing"):
+        integrate_eddy_diffusion(
+            initial_mole_fractions={"A": np.asarray([0.2, 0.2])},
+            sample_times_s=np.asarray([0.0, 50.0, 50.0, 100.0]),
+            **kwargs,
+        )

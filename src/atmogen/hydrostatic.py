@@ -10,11 +10,17 @@ from .models import AtmosphericProfile
 
 
 def logarithmic_pressure_interfaces(surface_pressure_pa: float, top_pressure_pa: float, layers: int) -> np.ndarray:
-    if surface_pressure_pa <= top_pressure_pa > 0 or top_pressure_pa <= 0:
+    surface = float(surface_pressure_pa)
+    top = float(top_pressure_pa)
+    if not np.isfinite(surface) or not np.isfinite(top):
+        raise ValueError("surface_pressure_pa and top_pressure_pa must be finite")
+    if not surface > top > 0.0:
         raise ValueError("require surface_pressure_pa > top_pressure_pa > 0")
-    if layers < 1:
+    if not isinstance(layers, (int, np.integer)) or isinstance(layers, (bool, np.bool_)):
+        raise TypeError("layers must be an integer")
+    if int(layers) < 1:
         raise ValueError("layers must be positive")
-    return np.geomspace(surface_pressure_pa, top_pressure_pa, layers + 1, dtype=np.float64)
+    return np.geomspace(surface, top, int(layers) + 1, dtype=np.float64)
 
 
 def logarithmic_cell_mean_pressure(pressure_interface_pa: np.ndarray) -> np.ndarray:
@@ -27,10 +33,18 @@ def logarithmic_cell_mean_pressure(pressure_interface_pa: np.ndarray) -> np.ndar
 
 
 def mean_molar_mass(mole_fractions: Mapping[str, float], database: ChemicalDatabase = BUILTIN_DATABASE) -> float:
-    total = sum(max(float(v), 0.0) for v in mole_fractions.values())
-    if total <= 0:
+    weighted = 0.0
+    total = 0.0
+    for key, raw_value in mole_fractions.items():
+        value = float(raw_value)
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError("mole fractions must be finite and non-negative")
+        species = database.get(key)
+        total += value
+        weighted += value * species.molar_mass_kg_mol
+    if total <= 0.0:
         raise ValueError("mole fractions must have positive total")
-    return float(sum(max(float(v), 0.0) * database.get(k).molar_mass_kg_mol for k, v in mole_fractions.items()) / total)
+    return float(weighted / total)
 
 
 def solve_temperature_profile_hydrostatic(
@@ -72,19 +86,23 @@ def solve_temperature_profile_hydrostatic(
 def solve_isothermal_hydrostatic(*, surface_pressure_pa: float, top_pressure_pa: float, temperature_k: float,
                                  gravity_m_s2: float, mole_fractions: Mapping[str, float], layers: int,
                                  database: ChemicalDatabase = BUILTIN_DATABASE) -> AtmosphericProfile:
-    if temperature_k <= 0 or gravity_m_s2 <= 0:
-        raise ValueError("temperature and gravity must be positive")
+    temperature = float(temperature_k)
+    gravity = float(gravity_m_s2)
+    if not np.isfinite(temperature) or not np.isfinite(gravity):
+        raise ValueError("temperature and gravity must be finite and positive")
+    if temperature <= 0.0 or gravity <= 0.0:
+        raise ValueError("temperature and gravity must be finite and positive")
     pi = logarithmic_pressure_interfaces(surface_pressure_pa, top_pressure_pa, layers)
     p = logarithmic_cell_mean_pressure(pi)
     molar_mass = mean_molar_mass(mole_fractions, database)
-    scale_height = R_GAS * temperature_k / (molar_mass * gravity_m_s2)
+    scale_height = R_GAS * temperature / (molar_mass * gravity)
     zi = scale_height * np.log(surface_pressure_pa / pi)
     z = 0.5 * (zi[:-1] + zi[1:])
-    rho = p * molar_mass / (R_GAS * temperature_k)
+    rho = p * molar_mass / (R_GAS * temperature)
     layer_mass_pressure = pi[:-1] - pi[1:]
-    reconstructed = rho * gravity_m_s2 * (zi[1:] - zi[:-1])
+    reconstructed = rho * gravity * (zi[1:] - zi[:-1])
     residual = float(np.max(np.abs(reconstructed - layer_mass_pressure) / np.maximum(layer_mass_pressure, 1e-30)))
-    return AtmosphericProfile(p, pi, z, np.full(layers, temperature_k), rho, molar_mass,
+    return AtmosphericProfile(p, pi, z, np.full(int(layers), temperature), rho, molar_mass,
                               dict(mole_fractions), residual)
 
 

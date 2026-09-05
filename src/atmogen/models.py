@@ -38,8 +38,8 @@ class PlanetPhysicalState:
                 raise ValueError(f"{name} must be finite and positive")
         if not 0 <= self.surface_albedo_initial < 1:
             raise ValueError("surface_albedo_initial must be in [0, 1)")
-        if self.internal_heat_flux_w_m2 < 0:
-            raise ValueError("internal_heat_flux_w_m2 cannot be negative")
+        if not np.isfinite(self.internal_heat_flux_w_m2) or self.internal_heat_flux_w_m2 < 0:
+            raise ValueError("internal_heat_flux_w_m2 must be finite and non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,10 +137,16 @@ class SolverSettings:
         return {Fidelity.FAST: 24, Fidelity.STANDARD: 48, Fidelity.HIGH: 96, Fidelity.REFERENCE: 160}[self.fidelity]
 
     def __post_init__(self) -> None:
-        if self.resolved_layers < 4:
-            raise ValueError("vertical_layers must be at least 4")
-        if self.top_pressure_pa <= 0:
-            raise ValueError("top_pressure_pa must be positive")
+        if self.vertical_layers is not None:
+            if (
+                not isinstance(self.vertical_layers, (int, np.integer))
+                or isinstance(self.vertical_layers, (bool, np.bool_))
+            ):
+                raise TypeError("vertical_layers must be an integer when supplied")
+            if int(self.vertical_layers) < 4:
+                raise ValueError("vertical_layers must be an integer of at least 4")
+        if not np.isfinite(self.top_pressure_pa) or self.top_pressure_pa <= 0:
+            raise ValueError("top_pressure_pa must be finite and positive")
         if self.chemistry_mode not in {"equilibrium", "fixed_species"}:
             raise ValueError("chemistry_mode must be equilibrium or fixed_species")
         if self.temperature_profile_mode not in {
@@ -197,10 +203,22 @@ class SolverSettings:
             raise ValueError("cloud_reevaporation_timescale_s must be positive when supplied")
         if not isinstance(self.cloud_quadrature_order, int) or not 1 <= self.cloud_quadrature_order <= 128:
             raise ValueError("cloud_quadrature_order must be an integer in [1, 128]")
-        if self.max_iterations < 1:
-            raise ValueError("max_iterations must be positive")
-        if not 0 < self.relaxation <= 1:
-            raise ValueError("relaxation must be in (0, 1]")
+        if (
+            not isinstance(self.max_iterations, (int, np.integer))
+            or isinstance(self.max_iterations, (bool, np.bool_))
+            or int(self.max_iterations) < 1
+        ):
+            raise ValueError("max_iterations must be a positive integer")
+        for name in (
+            "relative_temperature_tolerance",
+            "composition_tolerance",
+            "energy_tolerance_w_m2",
+        ):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and positive")
+        if not np.isfinite(self.relaxation) or not 0 < self.relaxation <= 1:
+            raise ValueError("relaxation must be finite and in (0, 1]")
 
 
 @dataclass(frozen=True, slots=True)
