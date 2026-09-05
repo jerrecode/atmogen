@@ -212,3 +212,31 @@ def test_explicit_saturated_mode_can_be_strict_when_no_condensate_exists():
                 allow_fidelity_fallback=False,
             ),
         )
+
+
+
+@pytest.mark.parametrize(
+    "composition",
+    [
+        {"N2": -0.1, "O2": 1.1},
+        {"N2": np.nan, "O2": 1.0},
+        {"N2": np.inf, "O2": 1.0},
+    ],
+)
+def test_mixture_heat_capacity_rejects_invalid_mole_fractions(composition):
+    from atmogen.thermal import mixture_molar_heat_capacity_j_mol_k
+
+    with pytest.raises(ValueError, match="mole_fractions.*finite and non-negative"):
+        mixture_molar_heat_capacity_j_mol_k(composition)
+
+
+def test_saturated_carrier_rejects_invalid_noncondensable_composition():
+    from atmogen.thermal import dilute_saturated_log_pressure_gradient
+
+    with pytest.raises(ValueError, match="mole_fractions.*finite and non-negative"):
+        dilute_saturated_log_pressure_gradient(
+            pressure_pa=1.0e5,
+            temperature_k=290.0,
+            mole_fractions={"N2": 1.1, "H2O": -0.1},
+            condensible="H2O",
+        )
